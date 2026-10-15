@@ -2,6 +2,16 @@
   "name": "dsh-grill-first",
   "version": "0.1.0",
   "description": "DSH 插件：开工前刨根问底——把模糊需求问成明确需求，用户确认后才放行主任务",
+  "icon": "./icon.png",
+  "author": "ZTMYchelly",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZTMYchelly/dsh-grill-first.git"
+  },
+  "homepage": "https://github.com/ZTMYchelly/dsh-grill-first#readme",
+  "bugs": {
+    "url": "https://github.com/ZTMYchelly/dsh-grill-first/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,8 +26,10 @@
   "files": [
     "dist",
     "cordis.patch.yml",
+    "icon.png",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"

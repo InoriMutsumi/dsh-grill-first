@@ -86,8 +86,27 @@ if (!pkg.peerDependencies?.['@deepseek-ai/schemastery']) {
 }
 
 // 工作表里的 R1–R8 代码位置标注
-const worksheet = await readFile(path.join(root, '..', 'dsh-grill-first-工作表.md'), 'utf8')
-const annotated = [...worksheet.matchAll(/R[1-8]\b[^\n]*`[^`]+:\d+/g)].length
+// 工作表不在仓库里（插件仓库要能独立发布），按当前工作区布局找；找不到就把试过的路径都列出来。
+const worksheetCandidates = [
+  path.join(root, '..', '..', '文档', 'dsh-grill-first-工作表.md'),
+  path.join(root, '..', '文档', 'dsh-grill-first-工作表.md'),
+  path.join(root, '..', '..', 'dsh-grill-first-工作表.md'),
+  path.join(root, '..', 'dsh-grill-first-工作表.md'),
+]
+let worksheetText = null
+for (const candidate of worksheetCandidates) {
+  try {
+    worksheetText = await readFile(candidate, 'utf8')
+    break
+  } catch {
+    /* 换下一个候选 */
+  }
+}
+if (worksheetText === null) {
+  problems.push(`找不到工作表文件，试过：\n  ${worksheetCandidates.join('\n  ')}`)
+  worksheetText = ''
+}
+const annotated = [...worksheetText.matchAll(/R[1-8]\b[^\n]*`[^`]+:\d+/g)].length
 notes.push(`工作表里带「文件:行号」标注的 R 条目：${annotated} 处。`)
 if (annotated < 8) problems.push(`工作表里 R1–R8 的「文件:行号」标注不足 8 处（实际 ${annotated} 处）`)
 

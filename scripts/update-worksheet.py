@@ -5,6 +5,12 @@
 import re
 import sys
 from datetime import datetime
+from pathlib import Path
+
+# 工作表默认放在"工作区根目录的 文档\"下：本脚本位于 <根>\项目\dsh-grill-first\scripts\，
+# 所以从脚本位置往上数三级就是工作区根目录（parents[3]），这样以后挪目录也不会写死路径。
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_WORKSHEET = WORKSPACE_ROOT / "文档" / "dsh-grill-first-工作表.md"
 
 DONE = {
     "1.1", "1.2", "1.3", "1.4",
@@ -65,12 +71,12 @@ APPENDIX = """
 
 - 已就绪：`README.md`（含 7 配置表、跳过词、记忆位置、patch 层改配置说明）、`LICENSE`（MIT，署名 InoriMutsumi）、`CHANGELOG.md`、`icon.png`、`package.json`（icon/author/repository/homepage/bugs/keywords/peerDependencies 齐备）、本地 git 仓库（2 次提交：`e64a4f8`、`149257d`）。
 - `npm pack` 产物：30 个文件、约 98 KB，只含 dist + cordis.patch.yml + icon.png + 文档。
-- **待用户**：GitHub 建仓库后运行 `G:\\大肥鱼\\推送dsh-grill-first.cmd`；npm 账号注册后再 `npm publish`（包名 `dsh-grill-first` 已确认未被占用）。
+- **待用户**：GitHub 建仓库后运行 `G:\\大肥鱼\\发布\\推送dsh-grill-first.cmd`；npm 账号注册后再 `npm publish`（包名 `dsh-grill-first` 已确认未被占用）。
 """.format(stamp=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 
 def main() -> None:
-    path = sys.argv[1] if len(sys.argv) > 1 else r"G:\大肥鱼\dsh-grill-first-工作表.md"
+    path = sys.argv[1] if len(sys.argv) > 1 else str(DEFAULT_WORKSHEET)
     text = open(path, encoding="utf-8").read()
 
     def repl(match: "re.Match[str]") -> str:

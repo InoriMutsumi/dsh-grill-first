@@ -63,7 +63,7 @@ APPENDIX = """
 
 ### A.5 阶段 7（发布）当前状态
 
-- 已就绪：`README.md`（含 7 配置表、跳过词、记忆位置、patch 层改配置说明）、`LICENSE`（MIT，署名 ZTMYchelly）、`CHANGELOG.md`、`icon.png`、`package.json`（icon/author/repository/homepage/bugs/keywords/peerDependencies 齐备）、本地 git 仓库（2 次提交：`e64a4f8`、`149257d`）。
+- 已就绪：`README.md`（含 7 配置表、跳过词、记忆位置、patch 层改配置说明）、`LICENSE`（MIT，署名 InoriMutsumi）、`CHANGELOG.md`、`icon.png`、`package.json`（icon/author/repository/homepage/bugs/keywords/peerDependencies 齐备）、本地 git 仓库（2 次提交：`e64a4f8`、`149257d`）。
 - `npm pack` 产物：30 个文件、约 98 KB，只含 dist + cordis.patch.yml + icon.png + 文档。
 - **待用户**：GitHub 建仓库后运行 `G:\\大肥鱼\\推送dsh-grill-first.cmd`；npm 账号注册后再 `npm publish`（包名 `dsh-grill-first` 已确认未被占用）。
 """.format(stamp=datetime.now().strftime("%Y-%m-%d %H:%M"))

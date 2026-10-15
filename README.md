@@ -32,7 +32,7 @@ dsh plugin --profile <你的 profile 名> add dsh-grill-first
 
 ```bash
 dsh plugin --profile <你的 profile 名> add /绝对路径/dsh-grill-first-0.1.0.tgz
-dsh plugin --profile <你的 profile 名> add github:ZTMYchelly/dsh-grill-first
+dsh plugin --profile <你的 profile 名> add github:InoriMutsumi/dsh-grill-first
 ```
 
 装完**即生效**：本机实测 DSH 的 live profile 会热加载新插件，不需要重启（若你的 profile 是启动式、或列表里没出现，再完全退出 DSH 重开一次）。

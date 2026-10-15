@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "description": "DSH 插件：开工前刨根问底——把模糊需求问成明确需求，用户确认后才放行主任务",
   "icon": "./icon.png",
-  "author": "ZTMYchelly",
+  "author": "InoriMutsumi",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZTMYchelly/dsh-grill-first.git"
+    "url": "git+https://github.com/InoriMutsumi/dsh-grill-first.git"
   },
-  "homepage": "https://github.com/ZTMYchelly/dsh-grill-first#readme",
+  "homepage": "https://github.com/InoriMutsumi/dsh-grill-first#readme",
   "bugs": {
-    "url": "https://github.com/ZTMYchelly/dsh-grill-first/issues"
+    "url": "https://github.com/InoriMutsumi/dsh-grill-first/issues"
   },
   "type": "module",
   "main": "dist/index.js",

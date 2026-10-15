@@ -1,5 +1,5 @@
 node_modules/
-# 注意：dist/ 故意提交进仓库——这样 `dsh plugin add github:ZTMYchelly/dsh-grill-first`
+# 注意：dist/ 故意提交进仓库——这样 `dsh plugin add github:InoriMutsumi/dsh-grill-first`
 # 这种从 git 安装的方式不需要额外构建步骤也能直接用。
 _ref/
 测试记录.md

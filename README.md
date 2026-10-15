@@ -1,5 +1,9 @@
 # dsh-grill-first
 
+![tests](https://img.shields.io/badge/tests-91%20passing-brightgreen)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![DSH plugin](https://img.shields.io/badge/DSH-plugin-blueviolet)
+
 > DSH（DeepSeek Harness）插件：**开工前先刨根问底**——把模糊需求问成明确需求，你在对话里点头之后，主任务才开工。
 
 ## 它解决什么问题

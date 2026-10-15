@@ -9,6 +9,7 @@ import type { GateRegistry } from '../gate/preExecute.js'
 import { judgeTask } from '../judge/heuristics.js'
 import { loadMemory, summarize } from '../memory/store.js'
 import type { GrillAgent, ToolDefinition, ToolRunContext } from '../types.js'
+import { PLUGIN_VERSION } from '../version.js'
 import type { SessionRegistry } from './sessions.js'
 
 /** 工具依赖（由 index.ts 装配注入）。 */
@@ -37,6 +38,8 @@ export interface GrillStartResult {
   task_id?: string
   previous_task?: string
   hint?: string
+  /** 当前运行的插件版本（取自 package.json）：用于确认改动是否已随重启生效。 */
+  version?: string
 }
 
 /** 把对象包成"回灌给模型的文本块"。 */
@@ -83,6 +86,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
     task_id: { type: 'string' },
     previous_task: { type: 'string' },
     hint: { type: 'string' },
+    version: { type: 'string', description: '运行中的插件版本；若缺失说明宿主加载的是旧版代码，需重启 DSH' },
   },
   additionalProperties: true,
 }
@@ -107,7 +111,7 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
       const mode = args.mode === 'drift-check' ? 'drift-check' : 'new-task'
 
       if (!config.enabled) {
-        return { verdict: 'clear', skip: true, reason: 'disabled' }
+        return { verdict: 'clear', skip: true, reason: 'disabled', version: PLUGIN_VERSION }
       }
       if (task === '') {
         return {
@@ -116,6 +120,7 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
           reason: 'empty-task',
           focus_hints: ['task 为空：请把用户的原话或任务摘要原样传进来，再调用一次 grill_start。'],
           hint: '缺少 task 参数。',
+          version: PLUGIN_VERSION,
         }
       }
 
@@ -132,6 +137,7 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
           score: judged.score,
           gate_state: 'open',
           mode,
+          version: PLUGIN_VERSION,
         }
       }
 
@@ -162,6 +168,7 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
         intensity: config.intensity,
         mode,
         task_id: `${agentId}:${startedAt}`,
+        version: PLUGIN_VERSION,
         ...(previous?.task ? { previous_task: previous.task } : {}),
       }
     },

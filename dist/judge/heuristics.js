@@ -54,10 +54,24 @@ export function satisfiedCount(hit) {
 export function hasSpecifics(text) {
     return SPECIFIC_PATTERNS.some((pattern) => pattern.test(text));
 }
+/** 纯 ASCII 关键词（如 skip）的匹配用：把词边界定义成"不是字母/数字/下划线/连字符"。 */
+const ASCII_WORD_CHARS = 'a-z0-9_-';
+/** 单个关键词是否命中：中文按子串，纯英文按词边界（避免 skipList / bypass-keyword 这类标识符误判）。 */
+function matchKeyword(lowerText, keyword) {
+    const kw = keyword.trim().toLowerCase();
+    if (kw === '')
+        return false;
+    // 含非 ASCII（中文等）的关键词：没有词边界概念，直接子串匹配
+    // eslint-disable-next-line no-control-regex
+    if (!/^[\x20-\x7e]+$/.test(kw))
+        return lowerText.includes(kw);
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^${ASCII_WORD_CHARS}])${escaped}($|[^${ASCII_WORD_CHARS}])`).test(lowerText);
+}
 /** 是否命中用户显式跳过词（R4）。 */
 export function hasBypassKeyword(text, keywords) {
     const lower = text.toLowerCase();
-    return keywords.some((keyword) => keyword.trim() !== '' && lower.includes(keyword.trim().toLowerCase()));
+    return keywords.some((keyword) => matchKeyword(lower, keyword));
 }
 /** 是否是"继续/追问"类短消息（R1：不触发提问）。 */
 export function isFollowUpMessage(text) {

@@ -1,5 +1,6 @@
 import { judgeTask } from '../judge/heuristics.js';
 import { loadMemory, summarize } from '../memory/store.js';
+import { PLUGIN_VERSION } from '../version.js';
 /** 把对象包成"回灌给模型的文本块"。 */
 export function textOutput(schema) {
     return {
@@ -42,6 +43,7 @@ const OUTPUT_SCHEMA = {
         task_id: { type: 'string' },
         previous_task: { type: 'string' },
         hint: { type: 'string' },
+        version: { type: 'string', description: '运行中的插件版本；若缺失说明宿主加载的是旧版代码，需重启 DSH' },
     },
     additionalProperties: true,
 };
@@ -63,7 +65,7 @@ export function createGrillStartTool(deps) {
             const task = typeof args.task === 'string' ? args.task.trim() : '';
             const mode = args.mode === 'drift-check' ? 'drift-check' : 'new-task';
             if (!config.enabled) {
-                return { verdict: 'clear', skip: true, reason: 'disabled' };
+                return { verdict: 'clear', skip: true, reason: 'disabled', version: PLUGIN_VERSION };
             }
             if (task === '') {
                 return {
@@ -72,6 +74,7 @@ export function createGrillStartTool(deps) {
                     reason: 'empty-task',
                     focus_hints: ['task 为空：请把用户的原话或任务摘要原样传进来，再调用一次 grill_start。'],
                     hint: '缺少 task 参数。',
+                    version: PLUGIN_VERSION,
                 };
             }
             const judged = judgeTask({ text: task, mode, bypassKeywords: config.bypassKeywords });
@@ -86,6 +89,7 @@ export function createGrillStartTool(deps) {
                     score: judged.score,
                     gate_state: 'open',
                     mode,
+                    version: PLUGIN_VERSION,
                 };
             }
             const startedAt = Date.now();
@@ -114,6 +118,7 @@ export function createGrillStartTool(deps) {
                 intensity: config.intensity,
                 mode,
                 task_id: `${agentId}:${startedAt}`,
+                version: PLUGIN_VERSION,
                 ...(previous?.task ? { previous_task: previous.task } : {}),
             };
         },

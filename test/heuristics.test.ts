@@ -123,6 +123,24 @@ describe('辅助函数', () => {
     expect(hasBypassKeyword('正常任务', DEFAULT_BYPASS_KEYWORDS)).toBe(false)
   })
 
+  it('hasBypassKeyword：中文关键词按子串匹配', () => {
+    expect(hasBypassKeyword('这个就别问了，直接搞', ['别问了'])).toBe(true)
+    expect(hasBypassKeyword('直接做', DEFAULT_BYPASS_KEYWORDS)).toBe(true)
+  })
+
+  it('hasBypassKeyword：英文关键词按词边界，标识符不算（实测踩过：任务里写 skipList 被误判为"用户要跳过提问"）', () => {
+    expect(hasBypassKeyword('修复 skipList 的渲染问题', ['skip'])).toBe(false)
+    expect(hasBypassKeyword('把 bypass-keyword 改成 skip_list', ['skip'])).toBe(false)
+    expect(hasBypassKeyword('调用 skipsBuffer() 清理', ['skip'])).toBe(false)
+    expect(hasBypassKeyword('这是 skip，请照做', ['skip'])).toBe(true)
+    expect(hasBypassKeyword('（skip）', ['skip'])).toBe(true)
+  })
+
+  it('hasBypassKeyword：关键词里的正则元字符被转义', () => {
+    expect(hasBypassKeyword('用 c++ 重写这段', ['c++'])).toBe(true)
+    expect(hasBypassKeyword('用 c 重写这段', ['c++'])).toBe(false)
+  })
+
   it('buildFocusHints 最多给 4 条', () => {
     const hints = buildFocusHints({ goal: false, scope: false, constraint: false, acceptance: false }, ['额外'])
     expect(hints.length).toBe(4)

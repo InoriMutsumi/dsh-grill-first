@@ -35,6 +35,8 @@ export interface GrillStartResult {
     task_id?: string;
     previous_task?: string;
     hint?: string;
+    /** 当前运行的插件版本（取自 package.json）：用于确认改动是否已随重启生效。 */
+    version?: string;
 }
 /** 把对象包成"回灌给模型的文本块"。 */
 export declare function textOutput(schema: Record<string, unknown>): ToolDefinition['output'];

@@ -264,6 +264,16 @@ describe('S3 跳过关键词', () => {
     const result = (await host.callTool('grill_start', { task: '别问了，直接搞' })) as Record<string, unknown>
     expect(result.skip).toBe(true)
     expect(result.reason).toBe('bypass-keyword')
+    // 关键不变量：用户说了跳过词之后必须真的能干活，不能把会话永久卡在门禁后面
+    expect(result.gate_state).toBe('open')
+    expect((await host.preExecute('write')).kind).toBe('allow')
+  })
+
+  it('返回里带 version：宿主加载的是旧代码时缺这个字段，便于判断要不要重启', async () => {
+    const host = createHost({ config: { gateMode: 'strict' } })
+    const result = (await host.callTool('grill_start', { task: '帮我做个爬虫' })) as Record<string, unknown>
+    expect(typeof result.version).toBe('string')
+    expect(result.version as string).toMatch(/^\d+\.\d+\.\d+/)
   })
 })
 

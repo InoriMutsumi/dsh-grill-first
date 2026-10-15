@@ -33,9 +33,18 @@ async function walk(dir, prefix = '') {
   return out
 }
 
-/** 文件内容的 sha256。 */
+/**
+ * 文件内容的 sha256。
+ *
+ * 文本文件先统一换行再比对：Windows 工作区里是 CRLF，而 npm 打出的包内是 LF，
+ * 直接比字节会把"换行风格差异"误报成"产物不一致"（本机实测踩过这个假告警）。
+ * 二进制文件（含 NUL 字节，如图标 PNG）按原字节比对。
+ */
 async function hash(file) {
-  return createHash('sha256').update(await readFile(file)).digest('hex')
+  const buf = await readFile(file)
+  const isText = !buf.includes(0)
+  const normalized = isText ? Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8') : buf
+  return createHash('sha256').update(normalized).digest('hex')
 }
 
 console.log(`已安装目录：${INSTALLED}\n`)

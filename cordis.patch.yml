@@ -1,0 +1,4 @@
+# DSH bundle 补丁：把本插件插入当前 profile 的插件表（格式参照已装插件 dsh-find-plugins）。
+- insert:
+    - id: dsh-grill-first
+      name: 'dsh-grill-first'

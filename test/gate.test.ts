@@ -14,6 +14,12 @@ describe('isMutatingTool：变更类工具名单', () => {
     }
   })
 
+  it('委派与装配类工具同样命中（堵住"先派个子代理去改"的绕行）', () => {
+    for (const tool of ['spawn_teammate', 'subagent', 'subagent_fork', 'workflow', 'team_task_create', 'plugin_manager', 'ops_write']) {
+      expect(isMutatingTool(tool), tool).toBe(true)
+    }
+  })
+
   it('只读工具放行', () => {
     for (const tool of [
       'read',

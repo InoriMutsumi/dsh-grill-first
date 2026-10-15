@@ -30,6 +30,9 @@ export const MUTATING_TOOLS: readonly string[] = [
   'subagent',
   'subagent_fork',
   'workflow',
+  'team_task_create',
+  // 注：plugin_manager 会改动 profile（装/卸插件），同属"动手"范畴，一并纳入。
+  'plugin_manager',
 ]
 
 /** 只读工具白名单：即使名字落在 univer_/ops_ 前缀里也一律放行。 */

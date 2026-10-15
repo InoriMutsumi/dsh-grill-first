@@ -105,9 +105,11 @@ DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客�
 ```bash
 npm install          # 装开发依赖（schemastery 由宿主提供，仅开发期需要）
 npm run build        # TypeScript → dist/
-npm test             # 构建 + 86 个单测 / 端到端场景测试
+npm test             # 构建 + 91 个单测 / 端到端场景测试
 node scripts/selfcheck.mjs   # 静态自检：中文 JSDoc、any 用量、需求→代码位置
 ```
+
+推送到 GitHub 后 `.github/workflows/ci.yml` 会自动跑上面那两条（`npm ci` + `npm test`）。`dist/` 是**故意提交**的：这样 `dsh plugin add github:…` 装完即可用，不需要在你的机器上编译。
 
 代码结构：
 
@@ -116,6 +118,7 @@ src/
   index.ts              插件装配入口（工具 + 协议段 + 门禁）
   config.ts             配置归一化（不依赖宿主，可单测）
   configSchema.ts       Schemastery 配置声明（设置界面用，7 项）
+  version.ts            从 package.json 读版本号，供 grill_start 返回
   judge/heuristics.ts   任务模糊度判定（纯函数）
   prompt/protocol.ts    注入系统提示的中文协议文本
   tools/grillStart.ts   grill_start 工具

@@ -93,10 +93,40 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
 /** 项目背景写入时截断的长度。 */
 const PROJECT_CONTEXT_LIMIT = 300
 
+/**
+ * 确认卡片标题（`question` 字段）的长度上限。
+ *
+ * 卡片高度被固定在 `min(60vh, 520px)`，而标题所在的 header 是 `flex-shrink: 0` 且**不滚动**：
+ * 标题一旦长到几百字，就会把唯一可收缩的正文区（选项按钮、自定义输入框都在里面）压成 0 高，
+ * 用户"选择不到开工选项"，只能关掉卡片手动打字。所以标题必须短，长清单一律走 `detail`。
+ */
+const CARD_TITLE_LIMIT = 60
+
+/** 确认卡片正文（`detail` 字段）的长度上限：正文在可滚动区里渲染，超长只截断不挤占布局。 */
+const CARD_DETAIL_LIMIT = 6000
+
+/** 卡片正文末尾的使用提示。 */
+const CARD_DETAIL_HINT = '确认后我才会开工；选择"要改"时请在最下面的输入框里写清要改哪里。'
+
 /** 取首行作为任务摘要。 */
 function firstLine(text: string): string {
   const line = text.split('\n').map((t) => t.trim()).find((t) => t !== '')
   return line ?? text.trim()
+}
+
+/** 压平空白（含换行）并截断，得到一行以内的卡片标题。 */
+function cardTitle(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > CARD_TITLE_LIMIT ? `${flat.slice(0, CARD_TITLE_LIMIT)}…` : flat
+}
+
+/** 卡片正文：完整清单（超长截断）+ 使用提示。 */
+function cardDetail(requirements: string): string {
+  const body =
+    requirements.length > CARD_DETAIL_LIMIT
+      ? `${requirements.slice(0, CARD_DETAIL_LIMIT)}\n\n（清单过长，此处已截断；完整内容见上面这条消息。）`
+      : requirements
+  return `${body}\n\n---\n\n${CARD_DETAIL_HINT}`
 }
 
 /**
@@ -171,7 +201,7 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
           needs_user_confirmation: true,
           requirements,
           instructions:
-            '当前没有可用的结构化提问通道：请用 ask_user_question 把上面的需求清单展示给用户，得到明确同意后再调用 grill_confirm(confirmed:true)；用户要改则按意见修订后重新确认。',
+            '当前没有可用的结构化提问通道：请用 ask_user_question 把需求清单展示给用户——question 只写一句 60 字以内的短标题（确认卡片标题栏不滚动，标题一长就会把选项区压得点不到），完整四段清单放进 detail 字段；得到明确同意后再调用 grill_confirm(confirmed:true)；用户要改则按意见修订后重新确认。',
         }
       }
 
@@ -180,8 +210,9 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
           {
             id: 'grill-confirm',
             header: '需求确认',
-            question: requirements,
-            detail: '确认后我才会开工；选择"要改"时请在下面写清要改哪里。',
+            // 标题只放一句短说明，完整清单走 detail：标题在固定头部（不可滚动），长了会挤掉选项区。
+            question: cardTitle(task),
+            detail: cardDetail(requirements),
             options: [
               { label: '确认，按此开工', description: '按上面的清单开始执行' },
               { label: '要改', description: '我会说明需要修改的地方' },
@@ -205,7 +236,7 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
           requirements,
           error: message,
           instructions:
-            '结构化提问失败：请改用 ask_user_question 展示需求清单并请用户确认，用户同意后再调用 grill_confirm(confirmed:true)。',
+            '结构化提问失败：请改用 ask_user_question 展示需求清单并请用户确认（同样要求：question 用 60 字以内的短标题，完整清单放 detail），用户同意后再调用 grill_confirm(confirmed:true)。',
         }
       }
 

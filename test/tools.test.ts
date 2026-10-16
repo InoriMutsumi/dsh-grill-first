@@ -161,6 +161,57 @@ describe('grill_confirm', () => {
     expect(global.preferences.map((p) => p.text)).toEqual(['注释一律用中文'])
   })
 
+  it('确认卡片：长标题被压成一行短标题，完整清单走 detail（长标题会挤掉选项区）', async () => {
+    const ask = vi.fn(async (_request: unknown) => ({
+      answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }],
+    }))
+    const { grillConfirm } = makeDeps({}, ask)
+    const requirements = `目标：${'很长的目标描述'.repeat(30)}\n范围：只改一个文件\n约束：不要新增依赖\n验收标准：单测全绿`
+
+    await grillConfirm.execute({ requirements }, execCtx())
+
+    const card = (ask.mock.calls[0]?.[0] as { questions: { question: string; detail: string }[] }).questions[0]!
+    expect(card.question.length).toBeLessThanOrEqual(61) // 60 字 + 省略号
+    expect(card.question.endsWith('…')).toBe(true)
+    expect(card.question).not.toContain('\n')
+    expect(card.detail).toContain(requirements) // 全文仍然完整可见
+    expect(card.detail).toContain('确认后我才会开工')
+    expect(card.detail).not.toContain('清单过长')
+  })
+
+  it('确认卡片：正文超过 6000 字时截断并提示', async () => {
+    const ask = vi.fn(async (_request: unknown) => ({
+      answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }],
+    }))
+    const { grillConfirm } = makeDeps({}, ask)
+    const requirements = `目标：做个爬虫\n范围：${'范围说明'.repeat(1500)}\n约束：不要新增依赖\n验收标准：单测全绿`
+
+    await grillConfirm.execute({ requirements }, execCtx())
+
+    const card = (ask.mock.calls[0]?.[0] as { questions: { question: string; detail: string }[] }).questions[0]!
+    expect(card.question).toBe('目标：做个爬虫')
+    expect(card.detail).toContain('清单过长，此处已截断')
+    expect(card.detail).toContain('确认后我才会开工')
+    expect(card.detail.length).toBeLessThan(6200) // 正文上限 6000 + 提示语
+    expect(card.detail).not.toContain('验收标准：单测全绿') // 超出上限的部分确实被截掉
+  })
+
+  it('确认卡片：清单不长时标题就是清单首行，正文原样带提示', async () => {
+    const ask = vi.fn(async (_request: unknown) => ({
+      answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }],
+    }))
+    const { grillConfirm } = makeDeps({}, ask)
+    const requirements = '目标：改错别字\n范围：只改 README\n约束：用中文\n验收标准：跑通检查'
+
+    await grillConfirm.execute({ requirements }, execCtx())
+
+    const card = (ask.mock.calls[0]?.[0] as { questions: { question: string; detail: string }[] }).questions[0]!
+    expect(card.question).toBe('目标：改错别字')
+    expect(card.detail).toContain(requirements)
+    expect(card.detail).toContain('确认后我才会开工')
+    expect(card.detail).not.toContain('清单过长')
+  })
+
   it('用户点"要改"：返回 feedback 且不放行', async () => {
     const ask = vi.fn(async () => ({ answers: [{ id: 'grill-confirm', selected: ['要改'], custom: '范围太大，只改一个文件' }] }))
     const { grillConfirm, gates } = makeDeps({}, ask)

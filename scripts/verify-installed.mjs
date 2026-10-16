@@ -53,7 +53,13 @@ if (!existsSync(INSTALLED)) process.exit(1)
 
 // 1) package.json 的入口与补丁路径指向真实存在的文件
 const pkg = JSON.parse(await readFile(path.join(INSTALLED, 'package.json'), 'utf8'))
-check('package.json 名称/版本一致', pkg.name === 'dsh-grill-first' && pkg.version === '0.1.0', `${pkg.name}@${pkg.version}`)
+// 期望版本取自仓库自己的 package.json（单一事实来源），避免每次升版都要回来改脚本里的硬编码版本号
+const localPkg = JSON.parse(await readFile(path.join(LOCAL, 'package.json'), 'utf8'))
+check(
+  'package.json 名称/版本与仓库一致',
+  pkg.name === localPkg.name && pkg.version === localPkg.version,
+  `${pkg.name}@${pkg.version}`,
+)
 check('icon 字段存在且文件存在', pkg.icon === './icon.png' && existsSync(path.join(INSTALLED, 'icon.png')))
 const mainFile = path.join(INSTALLED, pkg.main ?? '')
 check('main 指向的文件存在', existsSync(mainFile), pkg.main)

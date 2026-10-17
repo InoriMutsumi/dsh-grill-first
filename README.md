@@ -109,7 +109,7 @@ DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客�
 ```bash
 npm install          # 装开发依赖（schemastery 由宿主提供，仅开发期需要）
 npm run build        # TypeScript → dist/
-npm test             # 构建 + 91 个单测 / 端到端场景测试
+npm test             # 构建 + 94 个单测 / 端到端场景测试
 node scripts/selfcheck.mjs   # 静态自检：中文 JSDoc、any 用量、需求→代码位置
 ```
 
@@ -129,6 +129,28 @@ src/
   tools/grillConfirm.ts grill_confirm 工具
   gate/preExecute.ts    变更类工具门禁（tools/pre-execute + 新消息重置）
   memory/store.ts       两层记忆的读写
+```
+
+## 兼容性与适配
+
+本插件对外只有两处依赖，都不归 DSH 的"插件版本门禁"管：
+
+- **peer 依赖**：只有 `@deepseek-ai/schemastery`（`^3.18.1`，宿主自带；DSH 0.2.1-rc.2 里解析到的实际版本是 3.18.5）。
+- **宿主扩展点**：cordis 上下文 API —— `ctx.tools`（注册工具）、`ctx.get('userQuestions')`（结构化提问通道）、`ctx.inject(['systemPrompt'])`、事件 `tools/pre-execute` 与 `agent/inbox/inserted`。
+
+它**不 import 任何 `@deepseek-ai/dsh*` 运行时包**，所以既没有 `engines.dsh`，也没有 `@deepseek-ai/dsh` peer。DSH 的 `plugin-compatibility` 检查（`dsh-app-boot` 里的 `evaluatePluginCompatibility`）只在插件声明了 `engines.dsh` 或 `@deepseek-ai/dsh*` peer 时才介入，判不过才会被拦；本插件两条都不沾，因此升 DSH 一般不需要改代码。
+
+> 以后若要 import harness 内部包，请显式声明 peer 范围并带上预发布分支，例如
+> `">=0.2.0-rc.2 <0.3.0-0 || >=0.2.1-rc.1 <0.3.0-0"`。
+> DSH 自己的门禁用 `semver.satisfies(..., { includePrerelease: true })` 判定，`^0.2.0-rc.2` 能匹配 `0.2.1-rc.2`；
+> 但标准 npm 语义（不加 `includePrerelease`）会判不匹配，所以上游要求写显式分支。
+
+已验证的宿主版本：`0.2.0-rc.2`（0.1.x 开发期）、`0.2.1-rc.2`（2026-10-17 复核：`typecheck`、94 个单测、`verify-installed` 一致，且实测加载运行）。升完 DSH 后的自检三步：
+
+```bash
+node scripts/verify-installed.mjs   # 安装拷贝与仓库产物是否一致
+# 调一次 grill_start：返回里的 version 就是当前正在跑的插件版本
+# 再执行一个需要确认的任务：确认门禁仍然会拦（而不是悄悄放行）
 ```
 
 ## 已知限制

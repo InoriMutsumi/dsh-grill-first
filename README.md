@@ -77,7 +77,7 @@ dsh plugin --profile <你的 profile 名> add dsh-grill-first
 **方式三：本地包 / GitHub 仓库**
 
 ```bash
-dsh plugin --profile <你的 profile 名> add /绝对路径/dsh-grill-first-0.1.3.tgz
+dsh plugin --profile <你的 profile 名> add /绝对路径/dsh-grill-first-0.1.5.tgz
 dsh plugin --profile <你的 profile 名> add github:InoriMutsumi/dsh-grill-first
 ```
 

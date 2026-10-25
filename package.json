@@ -1,6 +1,6 @@
 {
   "name": "dsh-grill-first",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH 插件：开工前刨根问底——把模糊需求问成明确需求，用户确认后才放行主任务",
   "icon": "./icon.png",
   "author": "InoriMutsumi",

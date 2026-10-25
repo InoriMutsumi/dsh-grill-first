@@ -4,13 +4,13 @@
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![DSH plugin](https://img.shields.io/badge/DSH-plugin-blueviolet)
 
-> DSH（DeepSeek Harness）插件：**开工前先刨根问底**——把模糊需求问成明确需求，你在对话里点头之后，主任务才开工。
+> DSH（DeepSeek Harness）插件：接到任务先问清楚，把模糊需求聊成明确需求，你点头之后主任务才开工。
 
-**Agent 不是不会做，是经常做完了你才发现不是你要的。**
+**AI 助手最常犯的错，是替你补全没说清的部分，然后很自信地做完。**
 
 [English](./README.en.md) · [安装](#安装) · [配置项](#配置项) · [已知限制](#已知限制)
 
-## 30 秒看懂
+## 一次典型的对话
 
 ```text
 你  把那个页面优化一下
@@ -48,7 +48,7 @@
 
 ## 它解决什么问题
 
-AI 助手最常见的失败不是"不会做"，而是"做完了才发现做的不是你要的"。这个插件在**任何新任务开工前**插入一道需求澄清环节：
+这个插件在每次新任务开工前插一道需求澄清，省掉「做完了才发现不对」的返工：
 
 1. 模型先把你的任务原文交给 `grill_start` 判定；
 2. 任务模糊（缺目标 / 范围 / 约束 / 验收标准）→ 它按轮追问你，每轮 3 个问题，最多 3 轮，每轮都基于你上一轮的回答继续深挖；
@@ -56,9 +56,9 @@ AI 助手最常见的失败不是"不会做"，而是"做完了才发现做的�
 4. 你点"确认，按此开工"→ 本次任务放行；你点"要改"→ 它按你的反馈修订后再来一次；
 5. 一句话就能说清的小任务、以及带「直接做 / 跳过提问 / 不用问 / skip」字样的消息，**不会被打扰**。
 
-严格档位（`gateMode: "strict"`）下，需求没确认前模型无法执行写文件、跑命令这类**变更类**操作——从机制上保证"没问清就不许动手"。
+严格档位（`gateMode: "strict"`）下，需求没确认前模型不能写文件、跑命令。「没问清就不许动手」靠的是门禁，不靠模型自觉。
 
-`ask` 档位（0.1.4 新增）介于两者之间：需求没确认时，变更类操作会弹一张 DSH 原生确认卡片问你"照现在的理解直接动手吗"，你点「是」就放行，点「否」由你补一句需求——不写配置文件也能当场决定。
+`ask` 档位（0.1.4 新增）介于两者之间：需求没确认时，变更类操作会弹一张 DSH 原生确认卡片问你"照现在的理解直接动手吗"，你点「是」就放行，点「否」你再补一句需求。不用改配置文件。
 
 ## 安装
 
@@ -116,7 +116,6 @@ DSH 设置界面 → 插件 → dsh-grill-first，共 8 项：
 | `memoryEnabled` | 布尔 | `true` | 是否启用两层记忆 |
 | `memoryScope` | `project` / `global` | `project` | 项目背景/历史存哪：`project` 存工作区，`global` 存全局目录（跨项目共享） |
 
-> 默认是 `warn` 而不是 `strict`：默认档位保证升级插件不会突然卡住你已有的工作流。想要硬门禁请手动切 `strict`。
 
 ### 怎么改配置
 
@@ -147,7 +146,7 @@ DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客�
 | 全局层 | `<profile 目录>/grill-first/global.json`（不可写时退化到 `~/.dsh-grill-first/global.json`） | 通用偏好，如"注释一律用中文" |
 | 项目层 | `<工作区>/.dsh/grill-first/memory.json` | 项目背景、任务历史（任务名 + 需求摘要 + 日期） |
 
-项目层默认落在工作区；把 `memoryScope` 改成 `global` 后改落 `<全局目录>/project.json`——适合"所有项目通用"的背景约定，不想往每个仓库里塞 `.dsh/` 时也用这个。历史记录只保留最近 100 条（0.1.4 起）。
+项目层默认落在工作区；把 `memoryScope` 改成 `global` 后改落 `<全局目录>/project.json`，适合"所有项目通用"的背景约定，不想往每个仓库里塞 `.dsh/` 时也用这个。历史记录只保留最近 100 条（0.1.4 起）。
 
 下次追问时，`grill_start` 会把这些内容作为 `memory_context` 返回，模型就不会重复问你同一件事。
 
@@ -183,7 +182,7 @@ src/
 本插件对外只有两处依赖，都不归 DSH 的"插件版本门禁"管：
 
 - **peer 依赖**：只有 `@deepseek-ai/schemastery`（`^3.18.1`，宿主自带；DSH 0.2.1-rc.2 里解析到的实际版本是 3.18.5）。
-- **宿主扩展点**：cordis 上下文 API —— `ctx.tools`（注册工具）、`ctx.get('userQuestions')`（结构化提问通道）、`ctx.inject(['systemPrompt'])`、事件 `tools/pre-execute` 与 `agent/inbox/inserted`。
+- **宿主扩展点**：cordis 上下文 API：`ctx.tools`（注册工具）、`ctx.get('userQuestions')`（结构化提问通道）、`ctx.inject(['systemPrompt'])`、事件 `tools/pre-execute` 与 `agent/inbox/inserted`。
 
 它**不 import 任何 `@deepseek-ai/dsh*` 运行时包**，所以既没有 `engines.dsh`，也没有 `@deepseek-ai/dsh` peer。DSH 的 `plugin-compatibility` 检查（`dsh-app-boot` 里的 `evaluatePluginCompatibility`）只在插件声明了 `engines.dsh` 或 `@deepseek-ai/dsh*` peer 时才介入，判不过才会被拦；本插件两条都不沾，因此升 DSH 一般不需要改代码。
 

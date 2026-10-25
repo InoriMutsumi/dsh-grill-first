@@ -6,11 +6,11 @@
 
 > A [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/dsh) plugin that **interviews you before it starts working**: vague requests get clarified first, and the main task only starts once you confirm the summary.
 
-**Agents rarely fail because they can't do the work. They fail because they do the wrong work, confidently.**
+**Ask an agent to "optimize that page" and it will pick a page, pick a meaning of "optimize", and finish the job. Sometimes it picks the wrong page.**
 
 [中文](./README.md) · [Install](#install) · [Configuration](#configuration) · [Known limitations](#known-limitations)
 
-## See it in 30 seconds
+## One conversation
 
 ```text
 you  optimize that page
@@ -18,7 +18,7 @@ you  optimize that page
 it   1) Which page? 2) "Optimize" meaning speed, style or copy?
      3) How do we know it's done?
 
-you  the login page, mostly styling — the alignment and spacing look off
+you  the login page, mostly styling. The alignment and spacing look off.
 
 it   GOAL      tidy up the login page's visuals
      SCOPE     styling only; structure and copy stay as-is
@@ -55,13 +55,13 @@ Every new task starts with a check, not with work:
 2. If it's missing goal / scope / constraints / acceptance criteria, the plugin asks up to 3 questions per round, 3 rounds max, each round built on your previous answer.
 3. Once the picture is clear, `grill_confirm` hands you a four-part summary (goal / scope / constraints / acceptance criteria).
 4. "Confirm" releases the task; "change something" makes it revise and ask again.
-5. One-liners and questions don't trigger any of this — nor do messages containing `直接做`, `跳过提问`, `不用问`, `skip`, `skip the questions`, `just do it`.
+5. One-liners and questions don't trigger any of this, and neither do messages containing `直接做`, `跳过提问`, `不用问`, `skip`, `skip the questions`, `just do it`.
 
 ## Install
 
 Quit any running task first. Any of these works:
 
-**Plugin marketplace (recommended)** — DSH settings → Plugins → search `dsh-grill-first`.
+**Plugin marketplace (recommended):** DSH settings → Plugins → search `dsh-grill-first`.
 
 **npm**
 
@@ -75,7 +75,7 @@ dsh plugin --profile <your-profile> add dsh-grill-first
 dsh plugin --profile <your-profile> add github:InoriMutsumi/dsh-grill-first
 ```
 
-Live profiles hot-load the plugin — no restart needed (restart DSH once if it doesn't show up).
+Live profiles hot-load the plugin, so no restart is needed (restart DSH once if it doesn't show up).
 
 ## What you get
 
@@ -129,14 +129,14 @@ Only the keys you set are overridden; the rest keep their defaults. Config chang
 
 ## Two-layer memory
 
-Only what you actually confirmed is stored — never raw conversation, never the summary as a file.
+Only what you actually confirmed is stored. Raw conversation never is, and the summary never becomes a file.
 
 | Layer | Location | Contents |
 |---|---|---|
 | Global | `<profile>/grill-first/global.json` (falls back to `~/.dsh-grill-first/global.json`) | Standing preferences, e.g. "comments in English" |
 | Project | `<workspace>/.dsh/grill-first/memory.json` | Project background and task history (task name, summary, date; last 100 entries) |
 
-Set `memoryScope: global` to keep project context in the global directory instead — handy when you don't want a `.dsh/` folder in every repo. Next interview, `grill_start` returns this as `memory_context`, so the same question is never asked twice.
+Set `memoryScope: global` to keep project context in the global directory instead. Handy when you don't want a `.dsh/` folder in every repo. Next interview, `grill_start` returns this as `memory_context`, so the same question is never asked twice.
 
 ## Development
 
@@ -156,12 +156,12 @@ node scripts/selfcheck.mjs  # static check: Chinese JSDoc, `any` usage, spec-to-
 
 ## Known limitations
 
-- The gate only applies to the **root agent** that talks to you. Delegated work isn't gated (but delegation tools themselves are, so a subagent can't be used to sidestep it). This is deliberate.
-- `ask` mode asks **once per task** — otherwise a task that writes 20 files would show 20 cards. Use `strict` if you want every action blocked.
+- The gate only applies to the **root agent** that talks to you. Delegated work isn't gated (but delegation tools themselves are, so a subagent can't be used to sidestep it).
+- `ask` mode asks **once per task**: otherwise a task that writes 20 files would show 20 cards. Use `strict` if you want every action blocked.
 - The judge is **keyword heuristics**, not a semantic model: questions are detected by punctuation and interrogatives. Rare ambiguous sentences can be misjudged; say `直接做` or let the model call `grill_start` again to correct it.
 - The judge runs in Chinese and English only. English keywords match on word boundaries (`skip` matches `skip` and `(skip)` but not `skipList`).
 - Memory is plain local JSON, unencrypted.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

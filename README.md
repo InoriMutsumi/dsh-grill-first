@@ -20,19 +20,13 @@ AI 助手最常见的失败不是"不会做"，而是"做完了才发现做的�
 
 ## 安装
 
-装插件前请先退出正在跑的任务。三种方式任选：
+装插件前请先退出正在跑的任务。两种方式任选：
 
 **方式一：DSH 插件市场**（推荐）
 
 在 DSH 设置 → 插件里搜索 `dsh-grill-first` 一键安装。
 
-**方式二：npm 命令行**
-
-```bash
-dsh plugin --profile <你的 profile 名> add dsh-grill-first
-```
-
-**方式三：本地包 / GitHub 仓库**
+**方式二：本地包 / GitHub 仓库**
 
 ```bash
 dsh plugin --profile <你的 profile 名> add /绝对路径/dsh-grill-first-0.1.1.tgz

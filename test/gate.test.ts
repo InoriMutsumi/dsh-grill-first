@@ -1,6 +1,7 @@
 /** 门禁判定的单测（覆盖工作表 3.6 要求：strict 拦 write、放行 read、open 放行一切、off 零拦截）。 */
 import { describe, expect, it } from 'vitest'
 import {
+  GATE_ASK_REASON,
   GATE_DENY_REASON,
   GateRegistry,
   decideGate,
@@ -67,6 +68,25 @@ describe('decideGate：三种档位', () => {
 
   it('off 档位不拦截', () => {
     expect(decideGate({ toolName: 'write', state: 'closed', mode: 'off' }).action).toBe('allow')
+  })
+})
+
+describe('decideGate：ask 档位（0.1.4 新增，用宿主原生确认卡片）', () => {
+  it('ask + 未确认 + 变更类工具 → action=ask，不直接拒绝', () => {
+    const decision = decideGate({ toolName: 'write', state: 'closed', mode: 'ask' })
+    expect(decision.action).toBe('ask')
+    expect(decision.reason).toBe(GATE_DENY_REASON)
+    // 卡片的展示文案走宿主的 displayReason，措辞要能给用户二选一
+    expect(GATE_ASK_REASON).toContain('需求还没确认')
+  })
+
+  it('ask + 已确认 → 放行', () => {
+    expect(decideGate({ toolName: 'write', state: 'open', mode: 'ask' }).action).toBe('allow')
+  })
+
+  it('ask + 只读工具 → 放行（问问题不该弹卡片）', () => {
+    expect(decideGate({ toolName: 'read', state: 'closed', mode: 'ask' }).action).toBe('allow')
+    expect(decideGate({ toolName: 'web_search', state: 'closed', mode: 'ask' }).action).toBe('allow')
   })
 })
 

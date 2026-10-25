@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  MAX_HISTORY,
   SUMMARY_LIMIT,
   forget,
   globalMemoryPath,
@@ -166,5 +167,41 @@ describe('forget 与 summarize', () => {
 
   it('空记忆的摘要为空串', () => {
     expect(summarize({ global: { preferences: [] }, project: { project_context: [], history: [] } })).toBe('')
+  })
+})
+
+describe('0.1.4：memoryScope 与历史裁剪', () => {
+  it("scope=global 时项目层落到全局目录旁的 project.json（换工作区也能读到）", async () => {
+    // 设计上不塞进 global.json：偏好和项目背景分开存，forget 才能按层清。
+    expect(projectMemoryPath(workspace, 'global')).toBe(path.join(path.dirname(globalMemoryPath()), 'project.json'))
+
+    await saveProjectContext('这是一个跨项目通用的约定', workspace, 'global')
+    const otherWorkspace = await mkdtemp(path.join(tmpdir(), 'grill-ws2-'))
+    try {
+      const fromOther = await loadMemory(otherWorkspace, 'global')
+      expect(fromOther.project.project_context).toContain('这是一个跨项目通用的约定')
+      // 默认 project 作用域不受影响
+      const scoped = await loadMemory(workspace)
+      expect(scoped.project.project_context).toEqual([])
+    } finally {
+      await rm(otherWorkspace, { recursive: true, force: true })
+    }
+  })
+
+  it('scope=project（默认）不串到全局文件', async () => {
+    await saveProjectContext('只属于这个项目', workspace)
+    const global = await loadMemory(workspace, 'global')
+    expect(global.project.project_context).toEqual([])
+  })
+
+  it(`历史只保留最近 ${MAX_HISTORY} 条（旧实现无限增长）`, async () => {
+    const total = MAX_HISTORY + 5
+    for (let i = 0; i < total; i += 1) {
+      await saveHistory(`任务 ${i}`, `需求 ${i}`, workspace)
+    }
+    const memory = await loadMemory(workspace)
+    expect(memory.project.history).toHaveLength(MAX_HISTORY)
+    expect(memory.project.history[0]?.task).toBe(`任务 5`)
+    expect(memory.project.history.at(-1)?.task).toBe(`任务 ${total - 1}`)
   })
 })

@@ -43,6 +43,12 @@ export interface MemorySnapshot {
 /** forget() 的作用范围。 */
 export type MemoryScope = 'global' | 'project' | 'all'
 
+/** 项目层记忆的落点（0.1.4）：跟着工作区走，或全局共享一份。 */
+export type ProjectScope = 'project' | 'global'
+
+/** 项目层历史条目的保留上限（0.1.4 修：以前只增不减，文件会越长越大）。 */
+export const MAX_HISTORY = 100
+
 /** 摘要长度上限（字符数），供注入提示用。 */
 export const SUMMARY_LIMIT = 500
 
@@ -86,8 +92,14 @@ export function globalMemoryPath(): string {
   return path.join(base, 'global.json')
 }
 
-/** 项目记忆文件路径：`<workspace>/.dsh/grill-first/memory.json`。 */
-export function projectMemoryPath(workspaceRoot?: string): string {
+/**
+ * 项目记忆文件路径。
+ * @param workspaceRoot 工作区根目录。
+ * @param scope project（默认）= `<workspace>/.dsh/grill-first/memory.json`；
+ *   global = 与 global.json 同目录的 `project.json`（不想往项目里写文件时用）。
+ */
+export function projectMemoryPath(workspaceRoot?: string, scope: ProjectScope = 'project'): string {
+  if (scope === 'global') return path.join(path.dirname(globalMemoryPath()), 'project.json')
   return path.join(resolveWorkspace(workspaceRoot), '.dsh', 'grill-first', 'memory.json')
 }
 
@@ -153,9 +165,9 @@ function coerceProject(value: ProjectMemory | undefined): ProjectMemory {
  * 读取两层记忆。
  * @param workspaceRoot 工作区根目录；省略时用 `process.cwd()`。
  */
-export async function loadMemory(workspaceRoot?: string): Promise<MemorySnapshot> {
+export async function loadMemory(workspaceRoot?: string, scope: ProjectScope = 'project'): Promise<MemorySnapshot> {
   const global = coerceGlobal(await readJson<GlobalMemory>(globalMemoryPath(), emptyGlobal()))
-  const project = coerceProject(await readJson<ProjectMemory>(projectMemoryPath(workspaceRoot), emptyProject()))
+  const project = coerceProject(await readJson<ProjectMemory>(projectMemoryPath(workspaceRoot, scope), emptyProject()))
   return { global, project }
 }
 
@@ -196,10 +208,14 @@ export async function savePreference(text: string, tags: string[], workspaceRoot
  * @param text 项目背景原文。
  * @param workspaceRoot 工作区根目录。
  */
-export async function saveProjectContext(text: string, workspaceRoot?: string): Promise<void> {
+export async function saveProjectContext(
+  text: string,
+  workspaceRoot?: string,
+  scope: ProjectScope = 'project',
+): Promise<void> {
   const trimmed = text.trim()
   if (trimmed === '') return
-  const file = projectMemoryPath(workspaceRoot)
+  const file = projectMemoryPath(workspaceRoot, scope)
   const memory = coerceProject(await readJson<ProjectMemory>(file, emptyProject()))
   const key = normalizeKey(trimmed)
   if (!memory.project_context.some((t) => normalizeKey(t) === key)) {
@@ -214,14 +230,21 @@ export async function saveProjectContext(text: string, workspaceRoot?: string): 
  * @param requirements 用户确认过的四段式需求清单。
  * @param workspaceRoot 工作区根目录。
  */
-export async function saveHistory(task: string, requirements: string, workspaceRoot?: string): Promise<void> {
-  const file = projectMemoryPath(workspaceRoot)
+export async function saveHistory(
+  task: string,
+  requirements: string,
+  workspaceRoot?: string,
+  scope: ProjectScope = 'project',
+): Promise<void> {
+  const file = projectMemoryPath(workspaceRoot, scope)
   const memory = coerceProject(await readJson<ProjectMemory>(file, emptyProject()))
   memory.history.push({
     task: task.trim().slice(0, 200),
     requirements: requirements.trim().slice(0, 2000),
     date: new Date().toISOString().slice(0, 10),
   })
+  // 只保留最近 MAX_HISTORY 条：摘要只用最后 3 条，其余留着也读不到。
+  if (memory.history.length > MAX_HISTORY) memory.history = memory.history.slice(-MAX_HISTORY)
   await writeJsonAtomic(file, memory)
 }
 

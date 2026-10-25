@@ -1,12 +1,15 @@
 /**
  * 纯函数启发式判定（R1）：不调 LLM，只看任务文本判断"需求是否已经够清楚"。
  *
- * 判定顺序（先命中先返回）：bypass 关键词 → 追问/继续类消息 → 文本过短且无动作 →
+ * 判定顺序（先命中先返回）：bypass 关键词 → 追问/继续类消息 → 纯询问（问句/只读咨询）→ 文本过短且无动作 →
  * 四个需求维度（目标/范围/约束/验收标准）的覆盖度。
  */
 
 /** 判定模式：新任务 / 任务中途的需求变更检查。 */
 export type JudgeMode = 'new-task' | 'drift-check'
+
+/** 追问力度：只影响判定阈值，不改变判定顺序。 */
+export type JudgeIntensity = 'gentle' | 'standard' | 'grill'
 
 /** 判定结论。 */
 export type JudgeVerdict = 'clear' | 'needs-clarification'
@@ -24,6 +27,8 @@ export interface JudgeInput {
   text: string
   mode: JudgeMode
   bypassKeywords?: readonly string[]
+  /** 追问力度（默认 standard，保持旧行为）。 */
+  intensity?: JudgeIntensity
 }
 
 /** 判定输出。 */
@@ -48,21 +53,30 @@ export const DIMENSION_HINTS: Record<keyof DimensionHit, string> = {
 
 /** 维度关键词：目标（有动作、有产出）。 */
 const GOAL_WORDS =
-  /(做|写|实现|搭建|开发|创建|新增|加个|修复|改|优化|重构|迁移|升级|翻译|整理|分析|生成|设计|部署|发布|测试|排查|调研|对比|总结|转换|导出|导入|接入|对接|编写|画|制作|搞|弄)/
+  /(做|写|实现|搭建|开发|创建|新增|加个|修复|改|优化|重构|迁移|升级|翻译|整理|分析|生成|设计|部署|发布|测试|排查|调研|对比|总结|转换|导出|导入|接入|对接|编写|画|制作|搞|弄|\b(?:fix|add|implement|build|create|refactor|migrate|write|update|remove|delete|optimi[sz]e|translate|generate|analy[sz]e|design|deploy|publish|rewrite|upgrade|install|configure|support|enable|disable|clean|split|merge|rename)\b)/i
 /** 维度关键词：范围（边界、对象）。 */
 const SCOPE_WORDS =
-  /(只|仅|只要|只需要|范围|限定|针对|面向|所有|全部|部分|哪些|哪个|模块|页面|文件|目录|接口|字段|表|库|版本|第一步|先做|不含|除外)/
+  /(只|仅|只要|只需要|范围|限定|针对|面向|所有|全部|部分|哪些|哪个|模块|页面|文件|目录|接口|字段|表|库|版本|第一步|先做|不含|除外|\b(?:only|all|each|every|field|fields|page|pages|file|files|directory|module|api|endpoint|component|table|schema|version|repo|repository|branch|config|first)\b)/i
 /** 维度关键词：约束（技术栈、限制、风格）。忽略大小写，便于匹配 Python / UTF-8 这类写法。 */
 const CONSTRAINT_WORDS =
-  /(用|基于|必须|不能|不要|需要|依赖|兼容|保持|风格|注释|技术栈|框架|语言|不许|禁止|限制|预算|时间|截止|格式|规范|utf-?8|中文|英文|node|python|js|ts|react|vue|java|go|rust)/i
+  /(用|基于|必须|不能|不要|需要|依赖|兼容|保持|风格|注释|技术栈|框架|语言|不许|禁止|限制|预算|时间|截止|格式|规范|utf-?8|中文|英文|node|python|js|ts|react|vue|java|go|rust|\b(?:must|should|shall|need|needs|require|requires|required|use|using|based\s+on|compatible|compatibility|keep|preserve|avoid|without|existing)\b)/i
 /** 维度关键词：验收标准。 */
 const ACCEPTANCE_WORDS =
-  /(验收|标准|测试|通过|算完成|完成标准|结果|输出|期望|应该|返回|效果|达到|满足|可运行|跑通|全绿|正确|不报错|可用|验证|检查|示例|样例|截图|对比)/
+  /(验收|标准|测试|通过|算完成|完成标准|结果|输出|期望|应该|返回|效果|达到|满足|可运行|跑通|全绿|正确|不报错|可用|验证|检查|示例|样例|截图|对比|\b(?:acceptance|criteria|test|tests|pass|passes|passing|expect|expected|output|verify|verified|green|works|working|screenshot|sample|example)\b)/i
 /** 动作动词（用于"短文本是否已构成一个可执行指令"）。 */
 const ACTION_VERB =
   /(做|写|改|加|删|实现|搭建|开发|修复|优化|翻译|整理|分析|生成|设计|部署|测试|排查|调研|总结|转换|导出|接入|创建|重构|迁移|升级|安装|配置|画|制作)/
 /** 追问/继续类消息的开头。 */
 const FOLLOW_UP_LEAD = /^(继续|接着|然后呢|然后|下一步|再来|嗯|好|可以|行|ok|OK|对|是的|收到|谢谢|辛苦)/
+/** 问句收尾：出现即说明用户在提问，而不是在派活。 */
+const QUESTION_TAIL =
+  /(吗|呢|么|嘛|是不是|能不能|可不可以|有没有|怎么样|如何|为什么|为啥|啥意思|多少|哪个好)\s*[？?]?$|[？?]\s*$/
+/** 询问式开头：让我查/看/评估/解释，而不是让我动手。 */
+const INQUIRY_LEAD =
+  /^(?:please\s+|pls\s+|could you\s+|can you\s+)?(请问|问一下|想问|问下|看看|看一下|检查|查一下|查查|列出|列一下|统计|解释|说明|对比|评估|推荐|你觉得|你认为|这个|那个|现在|目前|为啥|为什么|look|check|see|show|list|tell|explain|describe|review|evaluate|summari[sz]e|search|find|verify|what|why|how|which)/i
+/** 明确的动手信号：一旦出现就不算纯询问（"改一下这个吗"仍然要先澄清）。 */
+const WRITE_SIGNAL =
+  /(改|写|删|新建|实现|修复|重构|迁移|生成|替换|安装|部署|发布|合并|提交|制作|画|创建|搭建|开发|添加|增加|移除)|\b(?:fix|add|implement|build|create|refactor|migrate|write|update|remove|delete|change|edit|rename|move|split|merge|install|deploy|publish|upgrade|generate|replace)\b/i
 /** 具体化信号：出现即说明用户给了可落地的细节。 */
 const SPECIFIC_PATTERNS: readonly RegExp[] = [
   /[A-Za-z0-9_\-./\\]+\.(ts|js|mjs|cjs|tsx|jsx|json|md|py|go|rs|java|c|cc|cpp|h|hpp|yml|yaml|toml|txt|csv|xlsx|png|jpg|jpeg|svg|html|css|vue|sh|ps1)/i,
@@ -135,6 +149,26 @@ export function buildFocusHints(hit: DimensionHit, extra: string[] = []): string
 }
 
 /**
+ * 是否是"纯询问"消息：问句或让我查/看/评估，且没有任何动手信号。
+ *
+ * 这类消息不需要澄清——用户就是要一个回答，继续追问反而是打扰。
+ * @param text 用户原文。
+ */
+export function isInquiry(text: string): boolean {
+  const flat = text.trim()
+  if (flat === '') return false
+  if (WRITE_SIGNAL.test(flat)) return false
+  return QUESTION_TAIL.test(flat) || INQUIRY_LEAD.test(flat)
+}
+
+/** 各力度档位的判定阈值：维度下限 + 是否强制覆盖验收标准。 */
+const INTENSITY_THRESHOLDS: Record<JudgeIntensity, { dims: number; needAcceptance: boolean }> = {
+  gentle: { dims: 2, needAcceptance: false },
+  standard: { dims: 3, needAcceptance: false },
+  grill: { dims: 3, needAcceptance: true },
+}
+
+/**
  * 判定任务文本是否需要澄清（纯函数，可单测）。
  * @param input 任务文本 + 模式 + 跳过关键词。
  */
@@ -144,6 +178,8 @@ export function judgeTask(input: JudgeInput): JudgeResult {
   const dimensions = detectDimensions(text)
   const satisfied = satisfiedCount(dimensions)
   const score = satisfied * 25
+  const intensity = input.intensity ?? 'standard'
+  const threshold = INTENSITY_THRESHOLDS[intensity] ?? INTENSITY_THRESHOLDS.standard
 
   if (text === '') {
     return {
@@ -160,10 +196,13 @@ export function judgeTask(input: JudgeInput): JudgeResult {
   if (isFollowUpMessage(text)) {
     return { verdict: 'clear', score: 95, focus_hints: [], dimensions, reason: 'follow-up' }
   }
+  if (isInquiry(text)) {
+    return { verdict: 'clear', score: 90, focus_hints: [], dimensions, reason: 'inquiry' }
+  }
 
   if (input.mode === 'drift-check') {
     const drift = DRIFT_MARKERS.test(text)
-    if (satisfied >= 3 && text.length >= 20) {
+    if (satisfied >= threshold.dims && text.length >= 20) {
       return { verdict: 'clear', score, focus_hints: [], dimensions, reason: 'drift-well-specified' }
     }
     return {
@@ -189,7 +228,7 @@ export function judgeTask(input: JudgeInput): JudgeResult {
       reason: 'too-short',
     }
   }
-  if (satisfied >= 3) {
+  if (satisfied >= threshold.dims && (!threshold.needAcceptance || dimensions.acceptance)) {
     return { verdict: 'clear', score, focus_hints: [], dimensions, reason: 'dimensions-covered' }
   }
   if (satisfied === 2 && (hasSpecifics(text) || TRANSFORM_PATTERN.test(text))) {

@@ -4,7 +4,7 @@
  * - clear：放行（门禁置 open），模型直接开工；
  * - needs-clarification：门禁置 closed，并返回记忆摘要、追问方向与轮次上限。
  */
-import type { GrillConfig } from '../config.js'
+import type { GrillConfig, MemoryScope } from '../config.js'
 import type { GateRegistry } from '../gate/preExecute.js'
 import { judgeTask } from '../judge/heuristics.js'
 import { loadMemory, summarize } from '../memory/store.js'
@@ -19,6 +19,8 @@ export interface GrillStartDeps {
   sessions: SessionRegistry
   /** 解析当前会话的工作区根目录（项目层记忆落点）。 */
   workspaceRoot: (agent?: GrillAgent) => string
+  /** 项目层记忆落在工作区还是插件家目录（memoryScope 配置）。 */
+  memoryScope?: () => MemoryScope
   logger?: { warn(message: string): void }
 }
 
@@ -38,6 +40,8 @@ export interface GrillStartResult {
   task_id?: string
   previous_task?: string
   hint?: string
+  /** 已经追问过的轮数（达到 maxRounds 后不再追问）。 */
+  rounds_used?: number
   /** 当前运行的插件版本（取自 package.json）：用于确认改动是否已随重启生效。 */
   version?: string
 }
@@ -86,6 +90,7 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
     task_id: { type: 'string' },
     previous_task: { type: 'string' },
     hint: { type: 'string' },
+    rounds_used: { type: 'number', description: '已经追问过的轮数' },
     version: { type: 'string', description: '运行中的插件版本；若缺失说明宿主加载的是旧版代码，需重启 DSH' },
   },
   additionalProperties: true,
@@ -124,7 +129,12 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
         }
       }
 
-      const judged = judgeTask({ text: task, mode, bypassKeywords: config.bypassKeywords })
+      const judged = judgeTask({
+        text: task,
+        mode,
+        bypassKeywords: config.bypassKeywords,
+        intensity: config.intensity,
+      })
       const previous = deps.sessions.get(agentId)
 
       if (judged.verdict === 'clear') {
@@ -142,13 +152,30 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
       }
 
       const startedAt = Date.now()
-      deps.sessions.start({ agentId, task, mode, startedAt })
+      // maxRounds 兜底：问够轮数就不再问，直接按当前理解开工（0.1.4 修：以前这个配置项根本没生效）。
+      const roundsUsed = previous?.rounds ?? 0
+      if (roundsUsed >= config.maxRounds) {
+        deps.sessions.end(agentId)
+        deps.gates.open(agentId)
+        return {
+          verdict: 'clear',
+          skip: true,
+          reason: 'max-rounds-reached',
+          score: judged.score,
+          gate_state: 'open',
+          mode,
+          rounds_used: roundsUsed,
+          hint: `已经追问 ${roundsUsed} 轮（上限 ${config.maxRounds}），按当前理解直接开工；有歧义就先做最小可验证版本。`,
+          version: PLUGIN_VERSION,
+        }
+      }
+      deps.sessions.start({ agentId, task, mode, startedAt, rounds: roundsUsed })
       deps.gates.close(agentId)
 
       let memoryContext = ''
       if (config.memoryEnabled) {
         try {
-          memoryContext = summarize(await loadMemory(deps.workspaceRoot(exec?.agent)))
+          memoryContext = summarize(await loadMemory(deps.workspaceRoot(exec?.agent), (deps.memoryScope?.() ?? 'project')))
         } catch (error) {
           deps.logger?.warn(`[grill-first] 读取记忆失败：${error instanceof Error ? error.message : String(error)}`)
           memoryContext = ''
@@ -168,6 +195,7 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
         intensity: config.intensity,
         mode,
         task_id: `${agentId}:${startedAt}`,
+        rounds_used: roundsUsed,
         version: PLUGIN_VERSION,
         ...(previous?.task ? { previous_task: previous.task } : {}),
       }

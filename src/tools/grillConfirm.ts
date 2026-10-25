@@ -9,7 +9,7 @@
  *
  * R3 红线：需求清单只进记忆的 history 字段，绝不写任何需求文件。
  */
-import type { GrillConfig } from '../config.js'
+import type { GrillConfig, MemoryScope } from '../config.js'
 import type { GateRegistry } from '../gate/preExecute.js'
 import { saveHistory, savePreference, saveProjectContext } from '../memory/store.js'
 import type {
@@ -30,6 +30,8 @@ export interface GrillConfirmDeps {
   sessions: SessionRegistry
   /** 解析当前会话的工作区根目录（项目层记忆落点）。 */
   workspaceRoot: (agent?: GrillAgent) => string
+  /** 项目层记忆落在工作区还是插件家目录（memoryScope 配置）。 */
+  memoryScope?: () => MemoryScope
   /** 结构化提问服务（可能不存在）。 */
   questions: () => UserQuestionsService | undefined
   logger?: { warn(message: string): void }
@@ -47,6 +49,9 @@ export interface GrillConfirmResult {
   skipped?: boolean
   reason?: string
   error?: string
+  /** 已追问轮数 / 剩余轮数（选"要改"时给出，供模型判断还要不要继续问）。 */
+  rounds_used?: number
+  rounds_left?: number
   saved?: { history: boolean; preferences: number; project_context: boolean }
 }
 
@@ -170,14 +175,15 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
         if (config.memoryEnabled) {
           const root = deps.workspaceRoot(exec?.agent)
           try {
-            await saveHistory(task, requirements, root)
+            const scope = deps.memoryScope?.() ?? 'project'
+            await saveHistory(task, requirements, root, scope)
             saved.history = true
             for (const preference of preferences) {
               await savePreference(preference, ['用户确认'], root)
               saved.preferences += 1
             }
             const context = requirements.replace(/\s+/g, ' ').slice(0, PROJECT_CONTEXT_LIMIT)
-            await saveProjectContext(context, root)
+            await saveProjectContext(context, root, scope)
             saved.project_context = true
           } catch (error) {
             deps.logger?.warn(
@@ -249,6 +255,9 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
         const result = await accept('structured-question')
         return custom === '' ? result : { ...result, user_note: custom }
       }
+      const rounds = deps.sessions.bumpRound(agentId)
+      const maxRounds = config.maxRounds
+      const roundsLeft = Math.max(0, maxRounds - rounds)
       return {
         confirmed: false,
         requirements,
@@ -256,6 +265,13 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
           custom !== ''
             ? custom
             : '用户选择了"要改"，但没有写明改哪里：请追问具体修改点，修订需求清单后再次调用 grill_confirm。',
+        rounds_used: rounds,
+        rounds_left: roundsLeft,
+        ...(roundsLeft === 0
+          ? {
+              instructions: `已达追问轮数上限（${maxRounds} 轮）：不要再问，直接按当前理解开工——下次调用 grill_start 会返回 clear。`,
+            }
+          : {}),
       }
     },
   }

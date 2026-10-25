@@ -102,16 +102,17 @@ function createHost(options: { roots?: string[]; config?: Record<string, unknown
     async preExecute(toolName: string, agentId = 'root-1') {
       const handlers = listeners.get('tools/pre-execute') ?? []
       const exec = { callId: 'call-x', name: toolName, arguments: {}, agent: { id: agentId } }
-      const run = async (index: number): Promise<{ kind: string; reason?: string }> => {
+      type Decision = { kind: string; reason?: string; displayReason?: string }
+      const run = async (index: number): Promise<Decision> => {
         if (index >= handlers.length) return { kind: 'allow' }
-        return (await handlers[index](exec as never, (() => run(index + 1)) as never)) as { kind: string; reason?: string }
+        return (await handlers[index](exec as never, (() => run(index + 1)) as never)) as Decision
       }
       return run(0)
     },
-    /** 模拟新用户消息到达。 */
-    inbox(agentId = 'root-1', role = 'user') {
+    /** 模拟新用户消息到达；text 决定插件判定"新任务"还是"追问"。 */
+    inbox(agentId = 'root-1', role = 'user', text = '') {
       for (const handler of listeners.get('agent/inbox/inserted') ?? []) {
-        handler({ agent: { id: agentId }, message: { role } } as never)
+        handler({ agent: { id: agentId }, message: { role, text } } as never)
       }
     },
     /** 调用插件注册的工具。 */
@@ -390,5 +391,77 @@ describe('确认通道退化（R3 的宿主兼容性）', () => {
     const result = (await host.callTool('grill_confirm', { requirements: REQUIREMENTS })) as Record<string, unknown>
     expect(result.confirmed).toBe(false)
     expect(result.feedback).toBe('范围太大，只改一个文件')
+  })
+})
+
+describe('0.1.4 新增：ask 档位（宿主原生确认卡片，不再直接拒绝）', () => {
+  it('未确认时变更类工具返回 ask + displayReason', async () => {
+    const host = createHost({ ask: async () => CONFIRM_ANSWER, config: { gateMode: 'ask' } })
+    host.inbox('root-1', 'user', '帮我改一下 README')
+
+    const decision = await host.preExecute('write')
+    expect(decision.kind).toBe('ask')
+    expect(String(decision.displayReason)).toContain('需求还没确认')
+    // 只读工具照旧放行
+    expect((await host.preExecute('read')).kind).toBe('allow')
+    // 只问一次：同一个任务里后续的变更类调用不再逐次弹卡片
+    expect((await host.preExecute('edit')).kind).toBe('allow')
+  })
+
+  it('确认后放行', async () => {
+    const host = createHost({ ask: async () => CONFIRM_ANSWER, config: { gateMode: 'ask' } })
+    host.inbox('root-1', 'user', '帮我改一下 README')
+    expect((await host.preExecute('write')).kind).toBe('ask')
+
+    await host.callTool('grill_confirm', { requirements: REQUIREMENTS, confirmed: true })
+    expect((await host.preExecute('write')).kind).toBe('allow')
+  })
+})
+
+describe('0.1.4 新增：用户追问不该把门禁关回去', () => {
+  it('"继续""嗯…" 保持放行，真新任务才重新关门', async () => {
+    const host = createHost({ config: { gateMode: 'strict' } })
+    await host.callTool('grill_confirm', { requirements: REQUIREMENTS, confirmed: true })
+    expect((await host.preExecute('write')).kind).toBe('allow')
+
+    host.inbox('root-1', 'user', '继续')
+    expect((await host.preExecute('write')).kind).toBe('allow')
+
+    host.inbox('root-1', 'user', '嗯，那个按钮再大一点')
+    expect((await host.preExecute('write')).kind).toBe('allow')
+
+    host.inbox('root-1', 'user', '帮我把 README 改一下')
+    expect((await host.preExecute('write')).kind).toBe('deny')
+  })
+
+  it('assistant 自己的消息不触发重置', async () => {
+    const host = createHost({ config: { gateMode: 'strict' } })
+    await host.callTool('grill_confirm', { requirements: REQUIREMENTS, confirmed: true })
+    host.inbox('root-1', 'assistant', '帮我把 README 改一下')
+    expect((await host.preExecute('write')).kind).toBe('allow')
+  })
+})
+
+describe('0.1.4 新增：maxRounds 真正生效（以前问多少轮都可以）', () => {
+  it('问满上限后 grill_start 直接放行，门禁也开', async () => {
+    const host = createHost({
+      config: { gateMode: 'strict', maxRounds: 1 },
+      ask: async () => ({ answers: [{ id: 'grill-confirm', selected: ['要改'], custom: '还是要改' }] }),
+    })
+
+    const first = (await host.callTool('grill_start', { task: '实现一个登录页面' })) as Record<string, unknown>
+    expect(first.verdict).toBe('needs-clarification')
+    expect(first.rounds_used).toBe(0)
+
+    const feedback = (await host.callTool('grill_confirm', { requirements: REQUIREMENTS })) as Record<string, unknown>
+    expect(feedback.confirmed).toBe(false)
+    expect(feedback.rounds_used).toBe(1)
+    expect(feedback.rounds_left).toBe(0)
+
+    const second = (await host.callTool('grill_start', { task: '实现一个登录页面' })) as Record<string, unknown>
+    expect(second.verdict).toBe('clear')
+    expect(second.reason).toBe('max-rounds-reached')
+    expect(second.rounds_used).toBe(1)
+    expect((await host.preExecute('write')).kind).toBe('allow')
   })
 })

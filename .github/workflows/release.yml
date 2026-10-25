@@ -1,0 +1,29 @@
+name: Release
+
+# 打 tag（v0.1.4 之类）自动发布到 npm。
+# 需要仓库 Secrets 里配 NPM_TOKEN（npm 的 Granular Access Token，勾选 Bypass 2FA、读写 All packages）；
+# 没配的话这一步会被跳过，改用本地 `npm publish`。
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      - name: Publish to npm
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

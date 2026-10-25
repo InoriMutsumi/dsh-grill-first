@@ -7,6 +7,7 @@ import {
   hasBypassKeyword,
   hasSpecifics,
   isFollowUpMessage,
+  isInquiry,
   judgeTask,
   satisfiedCount,
 } from '../dist/judge/heuristics.js'
@@ -51,7 +52,9 @@ describe('judgeTask：明确任务直接放行（R1）', () => {
   it('"把……翻译成……"这类两端明确的指令判为 clear（S2 场景）', () => {
     const result = judgeTask({ text: '把这段文字翻译成英文：Hello world, this is a test.', mode: 'new-task' })
     expect(result.verdict).toBe('clear')
-    expect(result.reason).toBe('small-explicit-task')
+    // 0.1.4 起英文关键词也参与维度统计，这句同时命中 goal/constraint/acceptance，
+    // 会先走 dimensions-covered；两种放行理由都算对。
+    expect(['dimensions-covered', 'small-explicit-task']).toContain(result.reason)
   })
 })
 
@@ -146,4 +149,97 @@ describe('辅助函数', () => {
     expect(hints.length).toBe(4)
     expect(hints[0]).toBe('额外')
   })
+})
+
+// ---------------- 0.1.4 新增 ----------------
+
+describe('isInquiry：纯询问不触发澄清（0.1.4）', () => {
+  it('中文问句/查资料类判为询问', () => {
+    expect(isInquiry('girll-first 的插件你认为还有需要优化的空间吗')).toBe(true)
+    expect(isInquiry('这个插件怎么样？')).toBe(true)
+    expect(isInquiry('检查下我的GitHub库，我想知道现在都有什么')).toBe(true)
+    expect(isInquiry('解释一下这段代码')).toBe(true)
+  })
+
+  it('英文询问也识别（主人在中英混用）', () => {
+    expect(isInquiry('look at my repo and tell me what is in it')).toBe(true)
+    expect(isInquiry('please check my github repos')).toBe(true)
+    expect(isInquiry('Can you describe the plugin?')).toBe(true)
+  })
+
+  it('带动手信号的不算询问（哪怕结尾是问号）', () => {
+    expect(isInquiry('帮我把 README 改一下吗？')).toBe(false)
+    expect(isInquiry('fix the failing test?')).toBe(false)
+    expect(isInquiry('能不能把这段代码重构一下')).toBe(false)
+  })
+
+  it('空文本不算询问', () => {
+    expect(isInquiry('   ')).toBe(false)
+  })
+})
+
+describe('judgeTask：问句直接放行（0.1.4 修"问问题被要求先澄清"）', () => {
+  it('中文询问 → clear / inquiry', () => {
+    const result = judgeTask({ text: '这个插件怎么样', mode: 'new-task' })
+    expect(result.verdict).toBe('clear')
+    expect(result.reason).toBe('inquiry')
+  })
+
+  it('英文询问 → clear / inquiry', () => {
+    const result = judgeTask({ text: 'please check my github repos', mode: 'new-task' })
+    expect(result.verdict).toBe('clear')
+    expect(result.reason).toBe('inquiry')
+  })
+})
+
+describe('judgeTask：intensity 真正改变阈值（0.1.4）', () => {
+  const text = '帮我写个脚本，把 data 目录下的 csv 转成 json'
+
+  it('gentle 只问关键点：两维即可放行', () => {
+    expect(judgeTask({ text: '实现一个登录页面', mode: 'new-task', intensity: 'gentle' }).verdict).toBe('clear')
+  })
+
+  it('standard 维持三维门槛', () => {
+    expect(judgeTask({ text, mode: 'new-task', intensity: 'standard' }).verdict).toBe('clear')
+    expect(judgeTask({ text: '实现一个登录页面', mode: 'new-task', intensity: 'standard' }).verdict).toBe(
+      'needs-clarification',
+    )
+  })
+
+  it('grill 额外要求验收标准：缺验收就继续问', () => {
+    const result = judgeTask({ text, mode: 'new-task', intensity: 'grill' })
+    expect(result.verdict).toBe('needs-clarification')
+    expect(result.dimensions.acceptance).toBe(false)
+  })
+
+  it('缺省 intensity 等价 standard（旧调用方不受影响）', () => {
+    const a = judgeTask({ text, mode: 'new-task' })
+    const b = judgeTask({ text, mode: 'new-task', intensity: 'standard' })
+    expect(a.verdict).toBe(b.verdict)
+    expect(a.score).toBe(b.score)
+  })
+})
+
+describe('回归样例表：主人真实说过的 11 句话（0.1.4 实测基线）', () => {
+  const cases: Array<{ text: string; verdict: 'clear' | 'needs-clarification'; reason: string }> = [
+    { text: '检查下我的GitHub库，我想知道现在都有什么', verdict: 'clear', reason: 'inquiry' },
+    { text: 'girll-first的插件你认为还有需要优化的空间吗', verdict: 'clear', reason: 'inquiry' },
+    { text: '帮我把 README 改一下', verdict: 'needs-clarification', reason: 'dimensions-missing' },
+    { text: '实现一个登录页面', verdict: 'needs-clarification', reason: 'dimensions-missing' },
+    { text: '删掉那个文件', verdict: 'needs-clarification', reason: 'dimensions-missing' },
+    { text: '我明天要交一份周报，帮我搞一下', verdict: 'needs-clarification', reason: 'dimensions-missing' },
+    { text: '把 D:/proj/a.ts 里的 getUserName 改成 getUserName2', verdict: 'clear', reason: 'small-explicit-task' },
+    { text: '嗯', verdict: 'clear', reason: 'follow-up' },
+    { text: '继续', verdict: 'clear', reason: 'follow-up' },
+    { text: 'look at my repo and tell me what is in it', verdict: 'clear', reason: 'inquiry' },
+    { text: 'fix the bug in src/app.ts', verdict: 'clear', reason: 'small-explicit-task' },
+  ]
+
+  for (const item of cases) {
+    it(`「${item.text}」→ ${item.verdict}`, () => {
+      const result = judgeTask({ text: item.text, mode: 'new-task' })
+      expect(result.verdict).toBe(item.verdict)
+      expect(result.reason).toBe(item.reason)
+    })
+  }
 })

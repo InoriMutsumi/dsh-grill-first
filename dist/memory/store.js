@@ -8,6 +8,8 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+/** 项目层历史条目的保留上限（0.1.4 修：以前只增不减，文件会越长越大）。 */
+export const MAX_HISTORY = 100;
 /** 摘要长度上限（字符数），供注入提示用。 */
 export const SUMMARY_LIMIT = 500;
 /** 摘要里各段的条数上限。 */
@@ -43,8 +45,15 @@ export function globalMemoryPath() {
     const base = override && override.trim() !== '' ? path.resolve(override) : path.join(homedir(), '.dsh', 'grill-first');
     return path.join(base, 'global.json');
 }
-/** 项目记忆文件路径：`<workspace>/.dsh/grill-first/memory.json`。 */
-export function projectMemoryPath(workspaceRoot) {
+/**
+ * 项目记忆文件路径。
+ * @param workspaceRoot 工作区根目录。
+ * @param scope project（默认）= `<workspace>/.dsh/grill-first/memory.json`；
+ *   global = 与 global.json 同目录的 `project.json`（不想往项目里写文件时用）。
+ */
+export function projectMemoryPath(workspaceRoot, scope = 'project') {
+    if (scope === 'global')
+        return path.join(path.dirname(globalMemoryPath()), 'project.json');
     return path.join(resolveWorkspace(workspaceRoot), '.dsh', 'grill-first', 'memory.json');
 }
 /** 归一化用于去重比较的文本（去空白、统一小写、去尾部标点）。 */
@@ -109,9 +118,9 @@ function coerceProject(value) {
  * 读取两层记忆。
  * @param workspaceRoot 工作区根目录；省略时用 `process.cwd()`。
  */
-export async function loadMemory(workspaceRoot) {
+export async function loadMemory(workspaceRoot, scope = 'project') {
     const global = coerceGlobal(await readJson(globalMemoryPath(), emptyGlobal()));
-    const project = coerceProject(await readJson(projectMemoryPath(workspaceRoot), emptyProject()));
+    const project = coerceProject(await readJson(projectMemoryPath(workspaceRoot, scope), emptyProject()));
     return { global, project };
 }
 /**
@@ -152,11 +161,11 @@ export async function savePreference(text, tags, workspaceRoot) {
  * @param text 项目背景原文。
  * @param workspaceRoot 工作区根目录。
  */
-export async function saveProjectContext(text, workspaceRoot) {
+export async function saveProjectContext(text, workspaceRoot, scope = 'project') {
     const trimmed = text.trim();
     if (trimmed === '')
         return;
-    const file = projectMemoryPath(workspaceRoot);
+    const file = projectMemoryPath(workspaceRoot, scope);
     const memory = coerceProject(await readJson(file, emptyProject()));
     const key = normalizeKey(trimmed);
     if (!memory.project_context.some((t) => normalizeKey(t) === key)) {
@@ -170,14 +179,17 @@ export async function saveProjectContext(text, workspaceRoot) {
  * @param requirements 用户确认过的四段式需求清单。
  * @param workspaceRoot 工作区根目录。
  */
-export async function saveHistory(task, requirements, workspaceRoot) {
-    const file = projectMemoryPath(workspaceRoot);
+export async function saveHistory(task, requirements, workspaceRoot, scope = 'project') {
+    const file = projectMemoryPath(workspaceRoot, scope);
     const memory = coerceProject(await readJson(file, emptyProject()));
     memory.history.push({
         task: task.trim().slice(0, 200),
         requirements: requirements.trim().slice(0, 2000),
         date: new Date().toISOString().slice(0, 10),
     });
+    // 只保留最近 MAX_HISTORY 条：摘要只用最后 3 条，其余留着也读不到。
+    if (memory.history.length > MAX_HISTORY)
+        memory.history = memory.history.slice(-MAX_HISTORY);
     await writeJsonAtomic(file, memory);
 }
 /**

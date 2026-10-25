@@ -9,7 +9,7 @@
  *
  * R3 红线：需求清单只进记忆的 history 字段，绝不写任何需求文件。
  */
-import type { GrillConfig } from '../config.js';
+import type { GrillConfig, MemoryScope } from '../config.js';
 import type { GateRegistry } from '../gate/preExecute.js';
 import type { GrillAgent, ToolDefinition, UserQuestionsService } from '../types.js';
 import type { SessionRegistry } from './sessions.js';
@@ -20,6 +20,8 @@ export interface GrillConfirmDeps {
     sessions: SessionRegistry;
     /** 解析当前会话的工作区根目录（项目层记忆落点）。 */
     workspaceRoot: (agent?: GrillAgent) => string;
+    /** 项目层记忆落在工作区还是插件家目录（memoryScope 配置）。 */
+    memoryScope?: () => MemoryScope;
     /** 结构化提问服务（可能不存在）。 */
     questions: () => UserQuestionsService | undefined;
     logger?: {
@@ -38,6 +40,9 @@ export interface GrillConfirmResult {
     skipped?: boolean;
     reason?: string;
     error?: string;
+    /** 已追问轮数 / 剩余轮数（选"要改"时给出，供模型判断还要不要继续问）。 */
+    rounds_used?: number;
+    rounds_left?: number;
     saved?: {
         history: boolean;
         preferences: number;

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, normalizeConfig } from '../dist/config.js'
 import { PROTOCOL_CHAR_LIMIT, buildProtocolText, protocolLength } from '../dist/prompt/protocol.js'
 
-describe('normalizeConfig：7 个配置项', () => {
+describe('normalizeConfig：8 个配置项', () => {
   it('空配置返回默认值', () => {
     expect(normalizeConfig(undefined)).toEqual(DEFAULT_CONFIG)
     expect(normalizeConfig({})).toEqual(DEFAULT_CONFIG)
@@ -17,6 +17,7 @@ describe('normalizeConfig：7 个配置项', () => {
     expect(DEFAULT_CONFIG.intensity).toBe('standard')
     expect(DEFAULT_CONFIG.bypassKeywords).toContain('直接做')
     expect(DEFAULT_CONFIG.memoryEnabled).toBe(true)
+    expect(DEFAULT_CONFIG.memoryScope).toBe('project')
   })
 
   it('合法值原样保留', () => {
@@ -28,6 +29,7 @@ describe('normalizeConfig：7 个配置项', () => {
       intensity: 'grill',
       bypassKeywords: ['快做', '别问'],
       memoryEnabled: false,
+      memoryScope: 'global',
     })
     expect(config).toEqual({
       enabled: false,
@@ -37,6 +39,7 @@ describe('normalizeConfig：7 个配置项', () => {
       intensity: 'grill',
       bypassKeywords: ['快做', '别问'],
       memoryEnabled: false,
+      memoryScope: 'global',
     })
   })
 
@@ -50,6 +53,12 @@ describe('normalizeConfig：7 个配置项', () => {
   it('枚举非法值退回默认', () => {
     expect(normalizeConfig({ gateMode: 'block' }).gateMode).toBe('warn')
     expect(normalizeConfig({ intensity: 'hard' }).intensity).toBe('standard')
+    expect(normalizeConfig({ memoryScope: 'workspace' }).memoryScope).toBe('project')
+  })
+
+  it('0.1.4 新增档位：gateMode=ask 与 memoryScope=global 都能原样保留', () => {
+    expect(normalizeConfig({ gateMode: 'ask' }).gateMode).toBe('ask')
+    expect(normalizeConfig({ memoryScope: 'global' }).memoryScope).toBe('global')
   })
 
   it('bypassKeywords 支持字符串（逗号/换行分隔）与数组', () => {

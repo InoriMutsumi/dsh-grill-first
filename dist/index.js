@@ -5,6 +5,7 @@
  * 在插件卸载/配置变更重挂载时自动清理。
  */
 import { normalizeConfig } from './config.js';
+import { judgeTask } from './judge/heuristics.js';
 import { Config } from './configSchema.js';
 import { GateRegistry, registerGate } from './gate/preExecute.js';
 import { PROTOCOL_SECTION_NAME, PROTOCOL_SECTION_ORDER, buildProtocolText } from './prompt/protocol.js';
@@ -68,6 +69,7 @@ export function apply(ctx, rawConfig) {
             gates,
             sessions,
             workspaceRoot,
+            memoryScope: () => config.memoryScope,
             ...(ctx.logger ? { logger: ctx.logger } : {}),
         }));
         register(createGrillConfirmTool({
@@ -75,6 +77,7 @@ export function apply(ctx, rawConfig) {
             gates,
             sessions,
             workspaceRoot,
+            memoryScope: () => config.memoryScope,
             questions: () => ctx.get('userQuestions'),
             ...(ctx.logger ? { logger: ctx.logger } : {}),
         }));
@@ -99,6 +102,16 @@ export function apply(ctx, rawConfig) {
     installProtocolSection(ctx, config);
     registerGate(ctx, gates, {
         mode: config.gateMode,
+        // 新消息到达时先看一眼内容：追问/询问类不关门禁，否则"刚确认完又被拦"。
+        shouldResetOnMessage: (text) => {
+            const judged = judgeTask({
+                text,
+                mode: 'new-task',
+                bypassKeywords: config.bypassKeywords,
+                intensity: config.intensity,
+            });
+            return judged.verdict !== 'clear';
+        },
         onWarning: (toolName, agentId) => {
             ctx.logger?.warn(`[grill-first] 需求尚未确认（warn 模式，仅记录未拦截）：${toolName}（agent=${agentId}）`);
         },

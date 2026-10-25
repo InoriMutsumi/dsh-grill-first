@@ -6,8 +6,11 @@
  */
 import { DEFAULT_BYPASS_KEYWORDS } from './judge/heuristics.js'
 
-/** 门禁档位：off=不拦截、warn=只记录、strict=拦截变更类工具。 */
-export type GateMode = 'off' | 'warn' | 'strict'
+/** 门禁档位：off=不拦截、warn=只记录、strict=拦截变更类工具、ask=先弹卡片问用户。 */
+export type GateMode = 'off' | 'warn' | 'strict' | 'ask'
+
+/** 项目层记忆的落点：project=跟着当前工作区走、global=全局共享一份。 */
+export type MemoryScope = 'project' | 'global'
 
 /** 追问力度。 */
 export type Intensity = 'gentle' | 'standard' | 'grill'
@@ -28,6 +31,8 @@ export interface GrillConfig {
   bypassKeywords: string[]
   /** 是否启用两层记忆（R5）。 */
   memoryEnabled: boolean
+  /** 项目层记忆落在哪里（0.1.4 新增：有些项目不想被写进 .dsh/）。 */
+  memoryScope: MemoryScope
 }
 
 /** 默认配置（与工作表 3.7 的默认值一致）。 */
@@ -39,6 +44,7 @@ export const DEFAULT_CONFIG: GrillConfig = {
   intensity: 'standard',
   bypassKeywords: [...DEFAULT_BYPASS_KEYWORDS],
   memoryEnabled: true,
+  memoryScope: 'project',
 }
 
 /** 取整并夹到 [min, max]；非法值返回 fallback。 */
@@ -82,11 +88,12 @@ export function normalizeConfig(raw: unknown): GrillConfig {
   const input = (raw ?? {}) as Record<string, unknown>
   return {
     enabled: pickBoolean(input.enabled, DEFAULT_CONFIG.enabled),
-    gateMode: pickEnum(input.gateMode, ['off', 'warn', 'strict'] as const, DEFAULT_CONFIG.gateMode),
+    gateMode: pickEnum(input.gateMode, ['off', 'warn', 'strict', 'ask'] as const, DEFAULT_CONFIG.gateMode),
     maxQuestionsPerRound: clampInt(input.maxQuestionsPerRound, 1, 6, DEFAULT_CONFIG.maxQuestionsPerRound),
     maxRounds: clampInt(input.maxRounds, 1, 10, DEFAULT_CONFIG.maxRounds),
     intensity: pickEnum(input.intensity, ['gentle', 'standard', 'grill'] as const, DEFAULT_CONFIG.intensity),
     bypassKeywords: pickStringList(input.bypassKeywords, DEFAULT_CONFIG.bypassKeywords),
     memoryEnabled: pickBoolean(input.memoryEnabled, DEFAULT_CONFIG.memoryEnabled),
+    memoryScope: pickEnum(input.memoryScope, ['project', 'global'] as const, DEFAULT_CONFIG.memoryScope),
   }
 }

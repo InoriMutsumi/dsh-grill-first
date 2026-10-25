@@ -104,14 +104,15 @@ export function createGrillConfirmTool(deps) {
                 if (config.memoryEnabled) {
                     const root = deps.workspaceRoot(exec?.agent);
                     try {
-                        await saveHistory(task, requirements, root);
+                        const scope = deps.memoryScope?.() ?? 'project';
+                        await saveHistory(task, requirements, root, scope);
                         saved.history = true;
                         for (const preference of preferences) {
                             await savePreference(preference, ['用户确认'], root);
                             saved.preferences += 1;
                         }
                         const context = requirements.replace(/\s+/g, ' ').slice(0, PROJECT_CONTEXT_LIMIT);
-                        await saveProjectContext(context, root);
+                        await saveProjectContext(context, root, scope);
                         saved.project_context = true;
                     }
                     catch (error) {
@@ -176,12 +177,22 @@ export function createGrillConfirmTool(deps) {
                 const result = await accept('structured-question');
                 return custom === '' ? result : { ...result, user_note: custom };
             }
+            const rounds = deps.sessions.bumpRound(agentId);
+            const maxRounds = config.maxRounds;
+            const roundsLeft = Math.max(0, maxRounds - rounds);
             return {
                 confirmed: false,
                 requirements,
                 feedback: custom !== ''
                     ? custom
                     : '用户选择了"要改"，但没有写明改哪里：请追问具体修改点，修订需求清单后再次调用 grill_confirm。',
+                rounds_used: rounds,
+                rounds_left: roundsLeft,
+                ...(roundsLeft === 0
+                    ? {
+                        instructions: `已达追问轮数上限（${maxRounds} 轮）：不要再问，直接按当前理解开工——下次调用 grill_start 会返回 clear。`,
+                    }
+                    : {}),
             };
         },
     };

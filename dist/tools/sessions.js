@@ -5,7 +5,15 @@ export class SessionRegistry {
     start(session) {
         if (!session.agentId)
             return;
-        this.sessions.set(session.agentId, session);
+        this.sessions.set(session.agentId, { ...session, rounds: session.rounds ?? 0 });
+    }
+    /** 记一轮追问（用户选"要改"时调用），返回累计轮数。 */
+    bumpRound(agentId) {
+        const session = this.sessions.get(agentId);
+        if (!session)
+            return 0;
+        session.rounds = (session.rounds ?? 0) + 1;
+        return session.rounds;
     }
     /** 读取某个 agent 的当前任务。 */
     get(agentId) {

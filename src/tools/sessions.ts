@@ -10,6 +10,8 @@ export interface GrillSession {
   task: string
   mode: JudgeMode
   startedAt: number
+  /** 已经追问过几轮（用户选"要改"算一轮），用于落实 maxRounds 上限。 */
+  rounds?: number
 }
 
 /** agent → 会话 的内存态映射（进程内，不持久化）。 */
@@ -19,7 +21,15 @@ export class SessionRegistry {
   /** 登记/覆盖一个 agent 的当前任务。 */
   start(session: GrillSession): void {
     if (!session.agentId) return
-    this.sessions.set(session.agentId, session)
+    this.sessions.set(session.agentId, { ...session, rounds: session.rounds ?? 0 })
+  }
+
+  /** 记一轮追问（用户选"要改"时调用），返回累计轮数。 */
+  bumpRound(agentId: string): number {
+    const session = this.sessions.get(agentId)
+    if (!session) return 0
+    session.rounds = (session.rounds ?? 0) + 1
+    return session.rounds
   }
 
   /** 读取某个 agent 的当前任务。 */

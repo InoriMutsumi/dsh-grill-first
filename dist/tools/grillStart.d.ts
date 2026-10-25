@@ -4,7 +4,7 @@
  * - clear：放行（门禁置 open），模型直接开工；
  * - needs-clarification：门禁置 closed，并返回记忆摘要、追问方向与轮次上限。
  */
-import type { GrillConfig } from '../config.js';
+import type { GrillConfig, MemoryScope } from '../config.js';
 import type { GateRegistry } from '../gate/preExecute.js';
 import type { GrillAgent, ToolDefinition } from '../types.js';
 import type { SessionRegistry } from './sessions.js';
@@ -15,6 +15,8 @@ export interface GrillStartDeps {
     sessions: SessionRegistry;
     /** 解析当前会话的工作区根目录（项目层记忆落点）。 */
     workspaceRoot: (agent?: GrillAgent) => string;
+    /** 项目层记忆落在工作区还是插件家目录（memoryScope 配置）。 */
+    memoryScope?: () => MemoryScope;
     logger?: {
         warn(message: string): void;
     };
@@ -35,6 +37,8 @@ export interface GrillStartResult {
     task_id?: string;
     previous_task?: string;
     hint?: string;
+    /** 已经追问过的轮数（达到 maxRounds 后不再追问）。 */
+    rounds_used?: number;
     /** 当前运行的插件版本（取自 package.json）：用于确认改动是否已随重启生效。 */
     version?: string;
 }

@@ -14,6 +14,7 @@ export const DEFAULT_CONFIG = {
     intensity: 'standard',
     bypassKeywords: [...DEFAULT_BYPASS_KEYWORDS],
     memoryEnabled: true,
+    memoryScope: 'project',
 };
 /** 取整并夹到 [min, max]；非法值返回 fallback。 */
 function clampInt(value, min, max, fallback) {
@@ -53,11 +54,12 @@ export function normalizeConfig(raw) {
     const input = (raw ?? {});
     return {
         enabled: pickBoolean(input.enabled, DEFAULT_CONFIG.enabled),
-        gateMode: pickEnum(input.gateMode, ['off', 'warn', 'strict'], DEFAULT_CONFIG.gateMode),
+        gateMode: pickEnum(input.gateMode, ['off', 'warn', 'strict', 'ask'], DEFAULT_CONFIG.gateMode),
         maxQuestionsPerRound: clampInt(input.maxQuestionsPerRound, 1, 6, DEFAULT_CONFIG.maxQuestionsPerRound),
         maxRounds: clampInt(input.maxRounds, 1, 10, DEFAULT_CONFIG.maxRounds),
         intensity: pickEnum(input.intensity, ['gentle', 'standard', 'grill'], DEFAULT_CONFIG.intensity),
         bypassKeywords: pickStringList(input.bypassKeywords, DEFAULT_CONFIG.bypassKeywords),
         memoryEnabled: pickBoolean(input.memoryEnabled, DEFAULT_CONFIG.memoryEnabled),
+        memoryScope: pickEnum(input.memoryScope, ['project', 'global'], DEFAULT_CONFIG.memoryScope),
     };
 }

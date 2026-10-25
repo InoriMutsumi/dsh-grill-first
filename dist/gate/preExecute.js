@@ -50,10 +50,11 @@ export const READ_ONLY_TOOLS = [
     'update_goal',
     'grill_start',
     'grill_confirm',
-    'grill_memory',
 ];
 /** 拦截时给模型看的拒绝文案（工作表 3.6 原文）。 */
 export const GATE_DENY_REASON = "需求尚未确认：请先调用 grill_confirm 完成需求确认，或让用户说'直接做'跳过。";
+/** ask 档弹给用户看的说明（宿主用 displayReason 渲染卡片正文）。 */
+export const GATE_ASK_REASON = '这次任务的需求还没确认，要照现在的理解直接动手吗？';
 const READ_ONLY_SET = new Set(READ_ONLY_TOOLS.map((n) => n.toLowerCase()));
 const MUTATING_SET = new Set(MUTATING_TOOLS.map((n) => n.toLowerCase()));
 /** univer_* 里只有这几个是只读的，其余按写类处理。 */
@@ -81,13 +82,45 @@ export function isMutatingTool(name) {
  * @param input 工具名 + 当前门禁状态 + 档位。
  */
 export function decideGate(input) {
-    if (input.mode !== 'strict')
+    // off / warn 只记录不拦截（warn 的提示在 registerGate 里单独打日志）。
+    if (input.mode === 'off' || input.mode === 'warn')
         return { action: 'allow' };
     if (input.state !== 'closed')
         return { action: 'allow' };
     if (!isMutatingTool(input.toolName))
         return { action: 'allow' };
+    if (input.mode === 'ask')
+        return { action: 'ask', reason: GATE_DENY_REASON };
     return { action: 'deny', reason: GATE_DENY_REASON };
+}
+/**
+ * 从宿主的 inbox 负载里尽量捞出用户消息文本。
+ *
+ * 不同宿主版本的字段名不统一（text / content / parts），取不到时返回空串；
+ * 空串表示"不知道用户说了什么"，此时保持旧行为（关门禁）最安全。
+ * @param payload `agent/inbox/inserted` 的事件负载。
+ */
+function extractMessageText(payload) {
+    const message = payload?.message;
+    if (typeof message === 'string')
+        return message.trim();
+    if (!message || typeof message !== 'object')
+        return '';
+    const record = message;
+    for (const key of ['text', 'content', 'body', 'prompt', 'parts']) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim() !== '')
+            return value.trim();
+        if (!Array.isArray(value))
+            continue;
+        const joined = value
+            .map((part) => (typeof part === 'string' ? part : part?.text))
+            .filter((part) => typeof part === 'string' && part.trim() !== '')
+            .join('\n');
+        if (joined.trim() !== '')
+            return joined.trim();
+    }
+    return '';
 }
 /** 每个 agent 的门禁状态表（agent 级隔离）。 */
 export class GateRegistry {
@@ -144,6 +177,17 @@ export function registerGate(ctx, gates, options) {
                 ctx.logger?.info?.(`[grill-first] 拦截 ${exec.name}（需求未确认，agent=${agentId}）`);
                 return { kind: 'deny', reason: decision.reason ?? GATE_DENY_REASON };
             }
+            if (decision.action === 'ask') {
+                // 只问一次：卡片弹过之后无论用户点头还是否决，都由用户决定，插件不再逐次弹
+                // （否则一次任务里写 20 个文件就会弹 20 张卡片）。
+                ctx.logger?.info?.(`[grill-first] 询问 ${exec.name}（需求未确认，agent=${agentId}）`);
+                gates.open(agentId);
+                return {
+                    kind: 'ask',
+                    reason: decision.reason ?? GATE_DENY_REASON,
+                    displayReason: GATE_ASK_REASON,
+                };
+            }
             if (options.mode === 'warn' && state === 'closed' && isMutatingTool(exec?.name ?? '')) {
                 options.onWarning?.(exec.name, agentId);
             }
@@ -158,6 +202,9 @@ export function registerGate(ctx, gates, options) {
             return;
         const agentId = payload?.agent?.id ?? '';
         if (agentId === '' || !isRootAgent(ctx, agentId))
+            return;
+        const text = extractMessageText(payload);
+        if (text !== '' && options.shouldResetOnMessage && !options.shouldResetOnMessage(text))
             return;
         gates.close(agentId);
     });

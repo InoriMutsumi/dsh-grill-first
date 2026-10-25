@@ -9,8 +9,8 @@
  * 3. warn 模式只记录不拦截（pre-execute 没有"放行 + 附带提示"这种返回形态）。
  */
 import type { GrillContext } from '../types.js';
-/** 门禁档位。 */
-export type GateMode = 'off' | 'warn' | 'strict';
+/** 门禁档位：ask 档在拦截前先弹一张"要不要继续"的卡片，交给人决定（0.1.4 新增）。 */
+export type GateMode = 'off' | 'warn' | 'strict' | 'ask';
 /** 门禁状态：open = 已确认或无需确认；closed = 尚未确认。 */
 export type GateState = 'open' | 'closed';
 /** 变更类工具名单（宁松勿紧）。 */
@@ -19,14 +19,16 @@ export declare const MUTATING_TOOLS: readonly string[];
 export declare const READ_ONLY_TOOLS: readonly string[];
 /** 拦截时给模型看的拒绝文案（工作表 3.6 原文）。 */
 export declare const GATE_DENY_REASON = "\u9700\u6C42\u5C1A\u672A\u786E\u8BA4\uFF1A\u8BF7\u5148\u8C03\u7528 grill_confirm \u5B8C\u6210\u9700\u6C42\u786E\u8BA4\uFF0C\u6216\u8BA9\u7528\u6237\u8BF4'\u76F4\u63A5\u505A'\u8DF3\u8FC7\u3002";
+/** ask 档弹给用户看的说明（宿主用 displayReason 渲染卡片正文）。 */
+export declare const GATE_ASK_REASON = "\u8FD9\u6B21\u4EFB\u52A1\u7684\u9700\u6C42\u8FD8\u6CA1\u786E\u8BA4\uFF0C\u8981\u7167\u73B0\u5728\u7684\u7406\u89E3\u76F4\u63A5\u52A8\u624B\u5417\uFF1F";
 /**
  * 判断某个工具名是否属于"会真正改动工作区/交付物"的变更类工具。
  * @param name 工具名。
  */
 export declare function isMutatingTool(name: string): boolean;
-/** 门禁判定结果。 */
+/** 门禁判定结果：ask = 弹卡片问用户后由其决定（宿主 PreToolDecision 支持）。 */
 export interface GateDecision {
-    action: 'allow' | 'deny';
+    action: 'allow' | 'deny' | 'ask';
     reason?: string;
 }
 /**
@@ -60,6 +62,14 @@ export interface GateOptions {
     mode: GateMode;
     /** warn 模式下的提示回调（默认写日志）。 */
     onWarning?: (toolName: string, agentId: string) => void;
+    /**
+     * 新用户消息到达时，是否把门禁重置为 closed。
+     *
+     * 0.1.4 修：以前每条用户消息都关门禁，导致"刚确认完、用户回一句继续"又被拦。
+     * 现在由判定器看一眼消息内容——追问/询问/说了跳过词之类不关门禁。
+     * 返回 true 才关门；未提供该回调时保持旧行为（一律关）。
+     */
+    shouldResetOnMessage?: (text: string) => boolean;
 }
 /**
  * 把门禁挂到宿主事件上：`tools/pre-execute` 拦截 + `agent/inbox/inserted` 重置。

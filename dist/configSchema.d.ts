@@ -10,18 +10,20 @@ import z from '@deepseek-ai/schemastery';
 /** 插件配置 schema：改了这里，设置界面与 cordis.yml 校验同时生效。 */
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
-    gateMode: z<"off" | "warn" | "strict", "off" | "warn" | "strict", "defined">;
+    gateMode: z<"off" | "warn" | "strict" | "ask", "off" | "warn" | "strict" | "ask", "defined">;
     maxQuestionsPerRound: z<number, number, "defined">;
     maxRounds: z<number, number, "defined">;
     intensity: z<"gentle" | "standard" | "grill", "gentle" | "standard" | "grill", "defined">;
     bypassKeywords: z<string[], string[], "defined">;
     memoryEnabled: z<boolean, boolean, "defined">;
+    memoryScope: z<"project" | "global", "project" | "global", "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
-    gateMode: z<"off" | "warn" | "strict", "off" | "warn" | "strict", "defined">;
+    gateMode: z<"off" | "warn" | "strict" | "ask", "off" | "warn" | "strict" | "ask", "defined">;
     maxQuestionsPerRound: z<number, number, "defined">;
     maxRounds: z<number, number, "defined">;
     intensity: z<"gentle" | "standard" | "grill", "gentle" | "standard" | "grill", "defined">;
     bypassKeywords: z<string[], string[], "defined">;
     memoryEnabled: z<boolean, boolean, "defined">;
+    memoryScope: z<"project" | "global", "project" | "global", "defined">;
 }>>, "plain">;

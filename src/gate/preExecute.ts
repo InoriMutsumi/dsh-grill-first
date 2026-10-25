@@ -10,8 +10,8 @@
  */
 import type { GrillAgent, GrillContext, PreToolDecision, ToolRunContext } from '../types.js'
 
-/** 门禁档位。 */
-export type GateMode = 'off' | 'warn' | 'strict'
+/** 门禁档位：ask 档在拦截前先弹一张"要不要继续"的卡片，交给人决定（0.1.4 新增）。 */
+export type GateMode = 'off' | 'warn' | 'strict' | 'ask'
 
 /** 门禁状态：open = 已确认或无需确认；closed = 尚未确认。 */
 export type GateState = 'open' | 'closed'
@@ -69,12 +69,14 @@ export const READ_ONLY_TOOLS: readonly string[] = [
   'update_goal',
   'grill_start',
   'grill_confirm',
-  'grill_memory',
 ]
 
 /** 拦截时给模型看的拒绝文案（工作表 3.6 原文）。 */
 export const GATE_DENY_REASON =
   "需求尚未确认：请先调用 grill_confirm 完成需求确认，或让用户说'直接做'跳过。"
+
+/** ask 档弹给用户看的说明（宿主用 displayReason 渲染卡片正文）。 */
+export const GATE_ASK_REASON = '这次任务的需求还没确认，要照现在的理解直接动手吗？'
 
 const READ_ONLY_SET = new Set(READ_ONLY_TOOLS.map((n) => n.toLowerCase()))
 const MUTATING_SET = new Set(MUTATING_TOOLS.map((n) => n.toLowerCase()))
@@ -95,9 +97,9 @@ export function isMutatingTool(name: string): boolean {
   return false
 }
 
-/** 门禁判定结果。 */
+/** 门禁判定结果：ask = 弹卡片问用户后由其决定（宿主 PreToolDecision 支持）。 */
 export interface GateDecision {
-  action: 'allow' | 'deny'
+  action: 'allow' | 'deny' | 'ask'
   reason?: string
 }
 
@@ -106,10 +108,37 @@ export interface GateDecision {
  * @param input 工具名 + 当前门禁状态 + 档位。
  */
 export function decideGate(input: { toolName: string; state: GateState; mode: GateMode }): GateDecision {
-  if (input.mode !== 'strict') return { action: 'allow' }
+  // off / warn 只记录不拦截（warn 的提示在 registerGate 里单独打日志）。
+  if (input.mode === 'off' || input.mode === 'warn') return { action: 'allow' }
   if (input.state !== 'closed') return { action: 'allow' }
   if (!isMutatingTool(input.toolName)) return { action: 'allow' }
+  if (input.mode === 'ask') return { action: 'ask', reason: GATE_DENY_REASON }
   return { action: 'deny', reason: GATE_DENY_REASON }
+}
+
+/**
+ * 从宿主的 inbox 负载里尽量捞出用户消息文本。
+ *
+ * 不同宿主版本的字段名不统一（text / content / parts），取不到时返回空串；
+ * 空串表示"不知道用户说了什么"，此时保持旧行为（关门禁）最安全。
+ * @param payload `agent/inbox/inserted` 的事件负载。
+ */
+function extractMessageText(payload: unknown): string {
+  const message = (payload as { message?: unknown } | null | undefined)?.message
+  if (typeof message === 'string') return message.trim()
+  if (!message || typeof message !== 'object') return ''
+  const record = message as Record<string, unknown>
+  for (const key of ['text', 'content', 'body', 'prompt', 'parts']) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    if (!Array.isArray(value)) continue
+    const joined = value
+      .map((part) => (typeof part === 'string' ? part : (part as { text?: unknown } | null)?.text))
+      .filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+      .join('\n')
+    if (joined.trim() !== '') return joined.trim()
+  }
+  return ''
 }
 
 /** 每个 agent 的门禁状态表（agent 级隔离）。 */
@@ -157,6 +186,14 @@ export interface GateOptions {
   mode: GateMode
   /** warn 模式下的提示回调（默认写日志）。 */
   onWarning?: (toolName: string, agentId: string) => void
+  /**
+   * 新用户消息到达时，是否把门禁重置为 closed。
+   *
+   * 0.1.4 修：以前每条用户消息都关门禁，导致"刚确认完、用户回一句继续"又被拦。
+   * 现在由判定器看一眼消息内容——追问/询问/说了跳过词之类不关门禁。
+   * 返回 true 才关门；未提供该回调时保持旧行为（一律关）。
+   */
+  shouldResetOnMessage?: (text: string) => boolean
 }
 
 /**
@@ -175,6 +212,17 @@ export function registerGate(ctx: GrillContext, gates: GateRegistry, options: Ga
         ctx.logger?.info?.(`[grill-first] 拦截 ${exec.name}（需求未确认，agent=${agentId}）`)
         return { kind: 'deny', reason: decision.reason ?? GATE_DENY_REASON } satisfies PreToolDecision
       }
+      if (decision.action === 'ask') {
+        // 只问一次：卡片弹过之后无论用户点头还是否决，都由用户决定，插件不再逐次弹
+        // （否则一次任务里写 20 个文件就会弹 20 张卡片）。
+        ctx.logger?.info?.(`[grill-first] 询问 ${exec.name}（需求未确认，agent=${agentId}）`)
+        gates.open(agentId)
+        return {
+          kind: 'ask',
+          reason: decision.reason ?? GATE_DENY_REASON,
+          displayReason: GATE_ASK_REASON,
+        } satisfies PreToolDecision
+      }
       if (options.mode === 'warn' && state === 'closed' && isMutatingTool(exec?.name ?? '')) {
         options.onWarning?.(exec.name, agentId)
       }
@@ -188,6 +236,8 @@ export function registerGate(ctx: GrillContext, gates: GateRegistry, options: Ga
     if (payload?.message?.role !== 'user') return
     const agentId = payload?.agent?.id ?? ''
     if (agentId === '' || !isRootAgent(ctx, agentId)) return
+    const text = extractMessageText(payload)
+    if (text !== '' && options.shouldResetOnMessage && !options.shouldResetOnMessage(text)) return
     gates.close(agentId)
   })
 }

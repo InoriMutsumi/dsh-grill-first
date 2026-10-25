@@ -1,6 +1,6 @@
 # dsh-grill-first
 
-![tests](https://img.shields.io/badge/tests-91%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-127%20passing-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![DSH plugin](https://img.shields.io/badge/DSH-plugin-blueviolet)
 
@@ -17,6 +17,8 @@ AI 助手最常见的失败不是"不会做"，而是"做完了才发现做的�
 5. 一句话就能说清的小任务、以及带「直接做 / 跳过提问 / 不用问 / skip」字样的消息，**不会被打扰**。
 
 严格档位（`gateMode: "strict"`）下，需求没确认前模型无法执行写文件、跑命令这类**变更类**操作——从机制上保证"没问清就不许动手"。
+
+`ask` 档位（0.1.4 新增）介于两者之间：需求没确认时，变更类操作会弹一张 DSH 原生确认卡片问你"照现在的理解直接动手吗"，你点「是」就放行，点「否」由你补一句需求——不写配置文件也能当场决定。
 
 ## 安装
 
@@ -56,38 +58,41 @@ dsh plugin --profile <你的 profile 名> add github:InoriMutsumi/dsh-grill-firs
 ### 想跳过提问时
 
 - 消息里带上「**直接做**」「**跳过提问**」「**不用问**」「**skip**」中任意一个 → 立刻开工；
+- 只是**问情况**（"这个插件怎么样""查一下我的仓库里有什么""解释一下这段代码"）→ 不算新任务，不追问；
 - 或者在设置里把 `enabled` 关掉 / 把 `gateMode` 调成 `off` → 整个插件静默。
 
 ## 配置项
 
-DSH 设置界面 → 插件 → dsh-grill-first，共 7 项：
+DSH 设置界面 → 插件 → dsh-grill-first，共 8 项：
 
 | 配置 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `enabled` | 布尔 | `true` | 总开关。关闭后既不追问也不拦截工具 |
-| `gateMode` | `off` / `warn` / `strict` | `warn` | `off` 不拦截；`warn` 只在日志里记录"需求未确认"；`strict` 未确认前拦截变更类工具 |
+| `gateMode` | `off` / `warn` / `ask` / `strict` | `warn` | `off` 不拦截；`warn` 只在日志里记录"需求未确认"；`ask` 未确认时弹卡片问你；`strict` 未确认前直接拦截变更类工具 |
 | `maxQuestionsPerRound` | 1-6 | `3` | 每轮最多问几个问题 |
-| `maxRounds` | 1-10 | `3` | 最多追问几轮 |
-| `intensity` | `gentle` / `standard` / `grill` | `standard` | 追问力度：只问关键点 / 标准 / 刨根问底 |
+| `maxRounds` | 1-10 | `3` | 最多追问几轮；问满后 `grill_start` 直接放行 |
+| `intensity` | `gentle` / `standard` / `grill` | `standard` | 追问力度：`gentle` 两维齐就放行 / `standard` 三维 / `grill` 还要求写清验收标准 |
 | `bypassKeywords` | 字符串数组 | `["直接做","跳过提问","不用问","skip"]` | 命中即跳过提问 |
 | `memoryEnabled` | 布尔 | `true` | 是否启用两层记忆 |
+| `memoryScope` | `project` / `global` | `project` | 项目背景/历史存哪：`project` 存工作区，`global` 存全局目录（跨项目共享） |
 
 > 默认是 `warn` 而不是 `strict`：默认档位保证升级插件不会突然卡住你已有的工作流。想要硬门禁请手动切 `strict`。
 
 ### 怎么改配置
 
-DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客户端的插件页不渲染第三方插件的配置表单），要改上面 7 项请编辑 **profile 的补丁层** `cordis.patch.yml`：
+DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客户端的插件页不渲染第三方插件的配置表单），要改上面 8 项请编辑 **profile 的补丁层** `cordis.patch.yml`：
 
 ```yaml
 # <profile 目录>/cordis.patch.yml
 - id: dsh-grill-first
   name: dsh-grill-first
   config:
-    gateMode: strict          # off | warn | strict
+    gateMode: strict          # off | warn | ask | strict
     maxQuestionsPerRound: 3   # 1-6
     maxRounds: 3              # 1-10
     intensity: standard       # gentle | standard | grill
     memoryEnabled: true
+    memoryScope: project      # project | global
     bypassKeywords: [直接做, 跳过提问, 不用问, skip]
 ```
 
@@ -102,6 +107,8 @@ DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客�
 | 全局层 | `<profile 目录>/grill-first/global.json`（不可写时退化到 `~/.dsh-grill-first/global.json`） | 通用偏好，如"注释一律用中文" |
 | 项目层 | `<工作区>/.dsh/grill-first/memory.json` | 项目背景、任务历史（任务名 + 需求摘要 + 日期） |
 
+项目层默认落在工作区；把 `memoryScope` 改成 `global` 后改落 `<全局目录>/project.json`——适合"所有项目通用"的背景约定，不想往每个仓库里塞 `.dsh/` 时也用这个。历史记录只保留最近 100 条（0.1.4 起）。
+
 下次追问时，`grill_start` 会把这些内容作为 `memory_context` 返回，模型就不会重复问你同一件事。
 
 ## 开发
@@ -109,7 +116,7 @@ DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客�
 ```bash
 npm install          # 装开发依赖（schemastery 由宿主提供，仅开发期需要）
 npm run build        # TypeScript → dist/
-npm test             # 构建 + 94 个单测 / 端到端场景测试
+npm test             # 构建 + 127 个单测 / 端到端场景测试
 node scripts/selfcheck.mjs   # 静态自检：中文 JSDoc、any 用量、需求→代码位置
 ```
 
@@ -121,7 +128,7 @@ node scripts/selfcheck.mjs   # 静态自检：中文 JSDoc、any 用量、需求
 src/
   index.ts              插件装配入口（工具 + 协议段 + 门禁）
   config.ts             配置归一化（不依赖宿主，可单测）
-  configSchema.ts       Schemastery 配置声明（设置界面用，7 项）
+  configSchema.ts       Schemastery 配置声明（设置界面用，8 项）
   version.ts            从 package.json 读版本号，供 grill_start 返回
   judge/heuristics.ts   任务模糊度判定（纯函数）
   prompt/protocol.ts    注入系统提示的中文协议文本
@@ -145,7 +152,7 @@ src/
 > DSH 自己的门禁用 `semver.satisfies(..., { includePrerelease: true })` 判定，`^0.2.0-rc.2` 能匹配 `0.2.1-rc.2`；
 > 但标准 npm 语义（不加 `includePrerelease`）会判不匹配，所以上游要求写显式分支。
 
-已验证的宿主版本：`0.2.0-rc.2`（0.1.x 开发期）、`0.2.1-rc.2`（2026-10-17 复核：`typecheck`、94 个单测、`verify-installed` 一致，且实测加载运行）。升完 DSH 后的自检三步：
+已验证的宿主版本：`0.2.0-rc.2`（0.1.x 开发期）、`0.2.1-rc.2`（2026-10-17 复核：`typecheck`、94 个单测、`verify-installed` 一致，且实测加载运行；0.1.4 起 127 个单测）。升完 DSH 后的自检三步：
 
 ```bash
 node scripts/verify-installed.mjs   # 安装拷贝与仓库产物是否一致
@@ -156,6 +163,8 @@ node scripts/verify-installed.mjs   # 安装拷贝与仓库产物是否一致
 ## 已知限制
 
 - 门禁只对**根 agent**（能直接跟你对话的那个）生效；子 agent / 团队成员不拦，否则正常的委派工作流会被卡死。因此**委派类工具本身**（`subagent`、`workflow`、`spawn_teammate`…）在未确认前也会被拦，防止"派个子代理替自己动手"绕过门禁。
+- `ask` 档位**只问一次**：卡片弹过之后门禁即视为放行（否则一次任务里写 20 个文件就要弹 20 张卡片）。想每次都拦，请用 `strict`。
+- 判定器是**关键词启发式**，不是语义模型：问句靠问号/疑问词/"查一下/看看"这类信号识别，极少数既像提问又像下令的句子可能判错；判错时直接说「直接做」或让模型调一次 `grill_start` 即可纠正。英文关键词按词边界匹配，中文按子串匹配。
 - `warn` 档位只能"记录不拦截"：DSH 的 `tools/pre-execute` 事件没有"放行但同时给模型提示"这种返回形态。
 - 记忆是本地文件，不含加密；删掉对应 json 即清空。
 - `grill_confirm` 优先走 DSH 的结构化提问通道；该通道不可用时（例如子 agent 内部）会返回 `needs_user_confirmation: true`，由模型改用内置提问工具兜底。

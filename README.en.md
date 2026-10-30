@@ -4,7 +4,7 @@
 
 [中文](./README.md) · [Configuration](#configuration) · [Two-layer memory](#two-layer-memory)
 
-This document describes V1 (1.0.0). It is published on [npm](https://www.npmjs.com/package/dsh-grill-first) and pushed to the GitHub repository. The automated suite (173 tests) passes, and the user confirmed that adding a preference works on the settings page. The host login page cannot be entered by an automated browser, so batch operations are covered only by client-logic regression tests, without a full browser screenshot.
+This document describes V1 (1.0.x). It is published on [npm](https://www.npmjs.com/package/dsh-grill-first) and pushed to the GitHub repository. Verification state: the automated suite (173 tests) passes, and the user confirmed on the real host page that both adding a preference and batch deletion work. The host login page cannot be entered by an automated browser, so these page operations have no screenshot record, only the user's confirmation.
 
 ## How it works
 

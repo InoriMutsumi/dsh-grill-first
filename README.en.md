@@ -4,7 +4,7 @@
 
 [中文](./README.md) · [Configuration](#configuration) · [Two-layer memory](#two-layer-memory)
 
-This document describes the V1 (1.0.0) working-tree implementation. It does not establish that V1 has been released, installed, or verified in the host UI.
+This document describes V1 (1.0.0). It is published on [npm](https://www.npmjs.com/package/dsh-grill-first) and pushed to the GitHub repository. The automated suite (173 tests) passes, and the user confirmed that adding a preference works on the settings page. The host login page cannot be entered by an automated browser, so batch operations are covered only by client-logic regression tests, without a full browser screenshot.
 
 ## How it works
 
@@ -90,7 +90,7 @@ All options are editable on the page, with one bypass keyword per line. The prof
 
 ### Preference management
 
-The same page supports listing, adding, editing, enabling, disabling and deleting global or project preferences. Edit text and tags and inspect provenance. Project preferences require a valid workspace registered with the host. Disabled preferences are omitted from future summaries; the page asks before deletion.
+The same page supports listing, adding, editing, enabling, disabling and deleting global or project preferences. Edit text and tags and inspect provenance. Preferences are sorted newest first, and the current filtered results can be selected for batch enable, disable or delete; batch deletion asks for confirmation and stops with a partial-progress report if one item fails. Project preferences require a valid workspace registered with the host. Disabled preferences are omitted from future summaries; the page asks before deletion.
 
 Saves check revisions for concurrent changes. Reload before editing again if a conflict occurs; malformed memory files are not silently overwritten. The management channel accepts only the host owner's browser and is not an LLM preference-writing tool. Turning `memoryEnabled` off stops automatic reads/writes but still permits managing existing preferences on the page.
 

@@ -140,15 +140,28 @@ const REQUIREMENTS = '目标：做一个商品爬虫\n范围：只抓商品列�
 
 const CONFIRM_ANSWER = { answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }] }
 
+describe('新任务使旧确认失效', () => {
+  it('明确的新任务到达后，旧卡片确认不得放行', async () => {
+    let answer!: (value: unknown) => void
+    const host = createHost({ config: { gateMode: 'strict', memoryEnabled: false }, ask: () => new Promise(resolve => { answer = resolve }) })
+    await host.callTool('grill_start', { task: '做个网站' })
+    const pending = host.callTool('grill_confirm', { requirements: REQUIREMENTS })
+    host.inbox('root-1', 'user', '帮我实现一个下载器，只处理公开文件，使用 Python，验收标准是测试通过并输出文件。')
+    answer(CONFIRM_ANSWER)
+    expect(await pending).toMatchObject({ confirmed: false, reason: 'stale-confirmation' })
+    expect((await host.preExecute('write')).kind).toBe('deny')
+  })
+})
+
 describe('插件装载（冒烟）', () => {
   it('导出名与依赖正确', () => {
     expect(name).toBe('dsh-grill-first')
     expect(inject).toContain('tools')
   })
 
-  it('注册两个工具，形状符合宿主 ToolDefinition 契约', () => {
+  it('注册三个工具，形状符合宿主 ToolDefinition 契约', () => {
     const host = createHost()
-    expect([...host.definitions.keys()].sort()).toEqual(['grill_confirm', 'grill_start'])
+    expect([...host.definitions.keys()].sort()).toEqual(['grill_confirm', 'grill_research', 'grill_start'])
     for (const [, definition] of host.definitions) {
       expect(typeof definition.description).toBe('string')
       expect((definition.parameters as { type?: string }).type).toBe('object')
@@ -240,7 +253,7 @@ describe('S1 模糊任务：追问 → 确认 → 放行（主链路）', () => 
 
 describe('S2 明确小任务：不打扰', () => {
   it('一句话说清的任务直接开工', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     const result = (await host.callTool('grill_start', {
       task: '把这段文字翻译成英文：Hello world, this is a test.',
     })) as Record<string, unknown>
@@ -252,7 +265,7 @@ describe('S2 明确小任务：不打扰', () => {
 
 describe('S3 跳过关键词', () => {
   it('"直接做"命中 bypass，立刻放行', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     host.inbox()
     const result = (await host.callTool('grill_start', { task: '直接做：把 README 里的错别字改掉' })) as Record<string, unknown>
     expect(result.skip).toBe(true)
@@ -271,7 +284,7 @@ describe('S3 跳过关键词', () => {
   })
 
   it('返回里带 version：宿主加载的是旧代码时缺这个字段，便于判断要不要重启', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     const result = (await host.callTool('grill_start', { task: '帮我做个爬虫' })) as Record<string, unknown>
     expect(typeof result.version).toBe('string')
     expect(result.version as string).toMatch(/^\d+\.\d+\.\d+/)
@@ -297,7 +310,7 @@ describe('S4 strict 门禁只拦 root agent', () => {
 
 describe('S5 两层记忆', () => {
   it('确认过的偏好会出现在下一次追问的 memory_context 里', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     await host.callTool('grill_confirm', {
       requirements: REQUIREMENTS,
       preferences_learned: ['回答一律用中文'],
@@ -311,7 +324,7 @@ describe('S5 两层记忆', () => {
   })
 
   it('memoryEnabled=false 时不读不写', async () => {
-    const host = createHost({ config: { memoryEnabled: false } })
+    const host = createHost({ config: { memoryEnabled: false }, ask: async () => CONFIRM_ANSWER })
     await host.callTool('grill_confirm', {
       requirements: REQUIREMENTS,
       preferences_learned: ['不该被记住'],
@@ -325,7 +338,7 @@ describe('S5 两层记忆', () => {
 
 describe('S6 需求变更（drift-check）', () => {
   it('确认后新消息到来会重新关闭门禁', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     await host.callTool('grill_confirm', { requirements: REQUIREMENTS, confirmed: true })
     expect((await host.preExecute('write')).kind).toBe('allow')
     host.inbox()
@@ -404,8 +417,8 @@ describe('0.1.4 新增：ask 档位（宿主原生确认卡片，不再直接拒
     expect(String(decision.displayReason)).toContain('需求还没确认')
     // 只读工具照旧放行
     expect((await host.preExecute('read')).kind).toBe('allow')
-    // 只问一次：同一个任务里后续的变更类调用不再逐次弹卡片
-    expect((await host.preExecute('edit')).kind).toBe('allow')
+    // 请求审批不代表审批已经通过，后续调用仍需审批。
+    expect((await host.preExecute('edit')).kind).toBe('ask')
   })
 
   it('确认后放行', async () => {
@@ -420,7 +433,7 @@ describe('0.1.4 新增：ask 档位（宿主原生确认卡片，不再直接拒
 
 describe('0.1.4 新增：用户追问不该把门禁关回去', () => {
   it('"继续""嗯…" 保持放行，真新任务才重新关门', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     await host.callTool('grill_confirm', { requirements: REQUIREMENTS, confirmed: true })
     expect((await host.preExecute('write')).kind).toBe('allow')
 
@@ -435,7 +448,7 @@ describe('0.1.4 新增：用户追问不该把门禁关回去', () => {
   })
 
   it('assistant 自己的消息不触发重置', async () => {
-    const host = createHost({ config: { gateMode: 'strict' } })
+    const host = createHost({ config: { gateMode: 'strict' }, ask: async () => CONFIRM_ANSWER })
     await host.callTool('grill_confirm', { requirements: REQUIREMENTS, confirmed: true })
     host.inbox('root-1', 'assistant', '帮我把 README 改一下')
     expect((await host.preExecute('write')).kind).toBe('allow')
@@ -443,7 +456,7 @@ describe('0.1.4 新增：用户追问不该把门禁关回去', () => {
 })
 
 describe('0.1.4 新增：maxRounds 真正生效（以前问多少轮都可以）', () => {
-  it('问满上限后 grill_start 直接放行，门禁也开', async () => {
+  it('问满上限停止追问但门禁保持关闭直到确认', async () => {
     const host = createHost({
       config: { gateMode: 'strict', maxRounds: 1 },
       ask: async () => ({ answers: [{ id: 'grill-confirm', selected: ['要改'], custom: '还是要改' }] }),
@@ -455,13 +468,12 @@ describe('0.1.4 新增：maxRounds 真正生效（以前问多少轮都可以）
 
     const feedback = (await host.callTool('grill_confirm', { requirements: REQUIREMENTS })) as Record<string, unknown>
     expect(feedback.confirmed).toBe(false)
-    expect(feedback.rounds_used).toBe(1)
-    expect(feedback.rounds_left).toBe(0)
+    expect(feedback.rounds_used).toBe(0)
+    expect(feedback.rounds_left).toBe(1)
 
-    const second = (await host.callTool('grill_start', { task: '实现一个登录页面' })) as Record<string, unknown>
-    expect(second.verdict).toBe('clear')
-    expect(second.reason).toBe('max-rounds-reached')
+    const second = (await host.callTool('grill_start', { task: '实现一个登录页面', mode: 'continue', answer_summary: '登录页面只支持邮箱登录', asked_dimensions: ['scope'] })) as Record<string, unknown>
+    expect(second.verdict).toBe('needs-clarification')
     expect(second.rounds_used).toBe(1)
-    expect((await host.preExecute('write')).kind).toBe('allow')
+    expect((await host.preExecute('write')).kind).toBe('deny')
   })
 })

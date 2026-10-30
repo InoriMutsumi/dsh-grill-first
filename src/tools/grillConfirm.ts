@@ -107,7 +107,7 @@ const PROJECT_CONTEXT_LIMIT = 300
  */
 const CARD_TITLE_LIMIT = 60
 
-/** 确认卡片正文（`detail` 字段）的长度上限：正文在可滚动区里渲染，超长只截断不挤占布局。 */
+/** 确认卡片正文（`detail` 字段）的长度上限：正文在可滚动区里渲染，超长必须拒绝并要求摘要。 */
 const CARD_DETAIL_LIMIT = 6000
 
 /** 卡片正文末尾的使用提示。 */
@@ -125,13 +125,9 @@ function cardTitle(text: string): string {
   return flat.length > CARD_TITLE_LIMIT ? `${flat.slice(0, CARD_TITLE_LIMIT)}…` : flat
 }
 
-/** 卡片正文：完整清单（超长截断）+ 使用提示。 */
+/** 卡片正文：完整清单（超长已在入口拒绝）+ 使用提示。 */
 function cardDetail(requirements: string): string {
-  const body =
-    requirements.length > CARD_DETAIL_LIMIT
-      ? `${requirements.slice(0, CARD_DETAIL_LIMIT)}\n\n（清单过长，此处已截断；完整内容见上面这条消息。）`
-      : requirements
-  return `${body}\n\n---\n\n${CARD_DETAIL_HINT}`
+  return `${requirements}\n\n---\n\n${CARD_DETAIL_HINT}`
 }
 
 /**
@@ -139,13 +135,14 @@ function cardDetail(requirements: string): string {
  * @param deps 配置读取、门禁表、会话表、工作区根目录、结构化提问服务。
  */
 export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
+  const fallback = new Map<string, { session: unknown; revision: string; gateRevision: number; requirements: string }>()
   return {
     name: 'grill_confirm',
     description:
       '把整理好的中文需求清单交给用户确认（grill-first 插件）。用户确认后本次任务放行，并把确认过的内容写入两层记忆；用户选"要改"时返回 feedback，据此修订后再次调用。',
     parameters: PARAMETERS,
     output: textOutput(OUTPUT_SCHEMA),
-    isConcurrencySafe: () => true,
+    isConcurrencySafe: () => false,
     async execute(rawArgs: unknown, exec: ToolRunContext): Promise<GrillConfirmResult> {
       const args = (rawArgs ?? {}) as { requirements?: unknown; preferences_learned?: unknown; confirmed?: unknown }
       const config = deps.config()
@@ -158,6 +155,15 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
       if (!config.enabled) {
         return { confirmed: true, skipped: true, reason: 'disabled' }
       }
+      const previousGateRevision = deps.gates.revisionOf(agentId)
+      deps.gates.close(agentId)
+      if (!deps.sessions.get(agentId)) {
+        deps.sessions.start({ agentId, task: firstLine(requirements) || '待确认需求', mode: 'new-task', startedAt: Date.now() })
+      }
+      if (requirements.length > CARD_DETAIL_LIMIT) {
+        return { confirmed: false, reason: 'requirements-too-long', instructions: `清单超过 ${CARD_DETAIL_LIMIT} 字，未展示也未授权。请先分段整理摘要，保留全部约束和验收条件，再提交完整四段清单确认。` }
+      }
+      if (exec?.signal?.aborted) return { confirmed: false, reason: 'confirmation-cancelled' }
       if (requirements === '') {
         return {
           confirmed: false,
@@ -168,9 +174,15 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
 
       const session = deps.sessions.get(agentId)
       const task = session?.task ?? firstLine(requirements)
+      const sessionRevision = JSON.stringify(session)
+      const gateRevision = deps.gates.revisionOf(agentId)
+      const isCurrent = () => deps.gates.revisionOf(agentId) === gateRevision && deps.sessions.get(agentId) === session && JSON.stringify(session) === sessionRevision
+      const stale = (): GrillConfirmResult => ({ confirmed: false, reason: 'stale-confirmation', instructions: '任务已经变化，请展示当前任务的清单重新确认。' })
 
       /** 确认后的落库动作：历史 + 全局偏好 + 项目背景，然后放行门禁。 */
       const accept = async (channel: string): Promise<GrillConfirmResult> => {
+        if (!isCurrent()) return stale()
+        if (exec?.signal?.aborted) return { confirmed: false, reason: 'confirmation-cancelled' }
         const saved = { history: false, preferences: 0, project_context: false }
         if (config.memoryEnabled) {
           const root = deps.workspaceRoot(exec?.agent)
@@ -191,17 +203,24 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
             )
           }
         }
+        if (!isCurrent()) return stale()
+        if (exec?.signal?.aborted) return { confirmed: false, reason: 'confirmation-cancelled' }
         deps.sessions.end(agentId)
         deps.gates.open(agentId)
         deps.logger?.warn?.(`[grill-first] 需求已确认（通道=${channel}，agent=${agentId}）`)
         return { confirmed: true, final_requirements: requirements, saved }
       }
 
-      // 通道 2：模型已自行用 ask_user_question 拿到用户同意，直接放行。
-      if (args.confirmed === true) return accept('agent-declared')
-
+      // 兜底声明只在本任务的同一清单确实进入兜底流程后有效。
+      const issued = fallback.get(agentId)
+      if (args.confirmed === true && issued && issued.session === session && issued.revision === sessionRevision && issued.gateRevision === previousGateRevision && issued.requirements === requirements) {
+        fallback.delete(agentId)
+        return accept('agent-declared-fallback')
+      }
+      const issueFallback = () => fallback.set(agentId, { session, revision: sessionRevision, gateRevision, requirements })
       const questions = deps.questions()
       if (!questions || typeof questions.ask !== 'function') {
+        issueFallback()
         return {
           confirmed: false,
           needs_user_confirmation: true,
@@ -236,6 +255,9 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
         answer = await questions.ask(request)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        if (!isCurrent()) return stale()
+        if (exec?.signal?.aborted) return { confirmed: false, reason: 'confirmation-cancelled' }
+        issueFallback()
         return {
           confirmed: false,
           needs_user_confirmation: true,
@@ -246,16 +268,21 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
         }
       }
 
+      if (!isCurrent()) return stale()
       const item = answer?.answers?.find((entry) => entry.id === 'grill-confirm')
       const selected = Array.isArray(item?.selected) ? item.selected : []
       const custom = typeof item?.custom === 'string' ? item.custom.trim() : ''
-      const userConfirmed = selected.some((label) => label.includes('确认'))
+      if (exec?.signal?.aborted) return { confirmed: false, reason: 'confirmation-cancelled' }
+      const userConfirmed = answer?.answers?.length === 1 && selected.length === 1 && selected[0] === '确认，按此开工'
 
       if (userConfirmed) {
         const result = await accept('structured-question')
         return custom === '' ? result : { ...result, user_note: custom }
       }
-      const rounds = deps.sessions.bumpRound(agentId)
+      if (selected.length !== 1 || selected[0] !== '要改') {
+        return { confirmed: false, reason: 'confirmation-not-received', needs_user_confirmation: true, requirements, instructions: '未收到有效确认，请重新展示完整清单并等待明确选择。' }
+      }
+      const rounds = deps.sessions.get(agentId)?.rounds ?? 0
       const maxRounds = config.maxRounds
       const roundsLeft = Math.max(0, maxRounds - rounds)
       return {
@@ -269,7 +296,7 @@ export function createGrillConfirmTool(deps: GrillConfirmDeps): ToolDefinition {
         rounds_left: roundsLeft,
         ...(roundsLeft === 0
           ? {
-              instructions: `已达追问轮数上限（${maxRounds} 轮）：不要再问，直接按当前理解开工——下次调用 grill_start 会返回 clear。`,
+              instructions: `已达追问轮数上限（${maxRounds} 轮）：按修改意见修订清单并标出假设，再调用 grill_confirm；确认前不得开工。`,
             }
           : {}),
       }

@@ -107,6 +107,19 @@ describe('judgeTask：需求变更检查（R6 / S6 场景）', () => {
 })
 
 describe('辅助函数', () => {
+  it('正则识别真实空白、URL、数量与 Windows 路径', () => {
+    expect(hasSpecifics('https://example.com')).toBe(true)
+    expect(hasSpecifics('采集 20 条')).toBe(true)
+    expect(hasSpecifics('C:\\project\\input.ts')).toBe(true)
+    expect(detectDimensions('implement only files using Python verify output')).toEqual({ goal: true, scope: true, constraint: true, acceptance: true })
+  })
+
+  it('按任务类型返回可执行追问方向', () => {
+    expect(judgeTask({ text: '做个爬虫', mode: 'new-task' }).focus_hints.join('')).toContain('字段')
+    expect(judgeTask({ text: '帮我修复 bug', mode: 'new-task' }).focus_hints.join('')).toContain('复现')
+    expect(judgeTask({ text: '写一份周报', mode: 'new-task' }).focus_hints.join('')).toContain('篇幅')
+  })
+
   it('detectDimensions 能识别四要素', () => {
     const hit = detectDimensions('只改 app.ts，用 TypeScript，跑通单测就算完成')
     expect(hit.goal).toBe(true)
@@ -173,6 +186,13 @@ describe('isInquiry：纯询问不触发澄清（0.1.4）', () => {
     expect(isInquiry('能不能把这段代码重构一下')).toBe(false)
   })
 
+  it('咨询实现方法先回答，不因讨论动作误判成派活', () => {
+    expect(isInquiry('如何实现登录页面？')).toBe(true)
+    expect(isInquiry('How to fix this error?')).toBe(true)
+    expect(isInquiry('解释一下如何部署')).toBe(true)
+    expect(isInquiry('如何部署？然后帮我实现')).toBe(false)
+  })
+
   it('空文本不算询问', () => {
     expect(isInquiry('   ')).toBe(false)
   })
@@ -217,6 +237,26 @@ describe('judgeTask：intensity 真正改变阈值（0.1.4）', () => {
     const b = judgeTask({ text, mode: 'new-task', intensity: 'standard' })
     expect(a.verdict).toBe(b.verdict)
     expect(a.score).toBe(b.score)
+  })
+})
+
+describe('否定式跳过指令（V1 复审实测：不要把"不要直接做"当成"直接做"）', () => {
+  it('被否定词紧贴修饰的跳过词不算命中', () => {
+    expect(hasBypassKeyword('不要直接做，先问清楚', DEFAULT_BYPASS_KEYWORDS)).toBe(false)
+    expect(hasBypassKeyword('不要跳过提问，帮我做个网站', DEFAULT_BYPASS_KEYWORDS)).toBe(false)
+    expect(hasBypassKeyword("don't skip, ask me first", DEFAULT_BYPASS_KEYWORDS)).toBe(false)
+    expect(hasBypassKeyword('do not skip the questions', DEFAULT_BYPASS_KEYWORDS)).toBe(false)
+  })
+
+  it('否定词被标点或其它词隔断时仍算命中', () => {
+    expect(hasBypassKeyword('不用问，直接做', DEFAULT_BYPASS_KEYWORDS)).toBe(true)
+    expect(hasBypassKeyword('这个就别问了，直接搞', ['别问了'])).toBe(true)
+  })
+
+  it('judgeTask 不因否定式跳过而放行', () => {
+    const result = judgeTask({ text: '不要直接做，先问清楚', mode: 'new-task' })
+    expect(result.reason).not.toBe('bypass-keyword')
+    expect(result.verdict).toBe('needs-clarification')
   })
 })
 

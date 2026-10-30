@@ -1,30 +1,31 @@
-/** agent → 会话 的内存态映射（进程内，不持久化）。 */
 export class SessionRegistry {
     sessions = new Map();
-    /** 登记/覆盖一个 agent 的当前任务。 */
     start(session) {
         if (!session.agentId)
             return;
-        this.sessions.set(session.agentId, { ...session, rounds: session.rounds ?? 0 });
+        this.sessions.set(session.agentId, { ...session, rounds: session.rounds ?? 0, history: session.history ?? [] });
     }
-    /** 记一轮追问（用户选"要改"时调用），返回累计轮数。 */
+    /** 只在实际追问得到答案后计数；相同摘要和维度的重试幂等。 */
+    recordAnswer(agentId, answer, asked, maxRounds) {
+        const session = this.sessions.get(agentId);
+        if (!session)
+            return 0;
+        const history = session.history ??= [];
+        const last = history.at(-1);
+        if (!answer || !asked.length || (last?.answer === answer && last.asked.join() === asked.join()))
+            return session.rounds ?? 0;
+        if ((session.rounds ?? 0) >= maxRounds)
+            return session.rounds ?? 0;
+        history.push({ answer, asked: [...asked] });
+        return this.bumpRound(agentId);
+    }
     bumpRound(agentId) {
         const session = this.sessions.get(agentId);
         if (!session)
             return 0;
-        session.rounds = (session.rounds ?? 0) + 1;
-        return session.rounds;
+        return session.rounds = (session.rounds ?? 0) + 1;
     }
-    /** 读取某个 agent 的当前任务。 */
-    get(agentId) {
-        return this.sessions.get(agentId);
-    }
-    /** 结束某个 agent 的澄清会话（确认完成或跳过）。 */
-    end(agentId) {
-        this.sessions.delete(agentId);
-    }
-    /** 清空（插件卸载时调用）。 */
-    clear() {
-        this.sessions.clear();
-    }
+    get(agentId) { return this.sessions.get(agentId); }
+    end(agentId) { this.sessions.delete(agentId); }
+    clear() { this.sessions.clear(); }
 }

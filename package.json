@@ -1,6 +1,6 @@
 {
   "name": "dsh-grill-first",
-  "version": "0.1.6",
+  "version": "1.0.0",
   "description": "DSH 插件：开工前刨根问底——把模糊需求问成明确需求，用户确认后才放行主任务",
   "icon": "./icon.png",
   "author": "InoriMutsumi",
@@ -20,14 +20,17 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./client": "./client/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "client/index.js",
     "cordis.patch.yml",
     "icon.png",
     "README.md",
+    "README.en.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
@@ -54,6 +57,10 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-settings"]
+    },
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
@@ -62,6 +69,6 @@
     "@deepseek-ai/schemastery": "^3.18.4",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "4.1.12"
   }
 }

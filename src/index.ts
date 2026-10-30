@@ -11,7 +11,10 @@ import { GateRegistry, registerGate } from './gate/preExecute.js'
 import { PROTOCOL_SECTION_NAME, PROTOCOL_SECTION_ORDER, buildProtocolText } from './prompt/protocol.js'
 import { createGrillConfirmTool } from './tools/grillConfirm.js'
 import { createGrillStartTool } from './tools/grillStart.js'
+import { createGrillResearchTool } from './tools/grillResearch.js'
 import { SessionRegistry } from './tools/sessions.js'
+import { installSettingsBridge } from './settings/bridge.js'
+import { createConfigurationSettings, type ConfigurationEditor } from './settings/configuration.js'
 import type { GrillAgent, GrillContext, ToolsService, ToolDefinition, UserQuestionsService } from './types.js'
 import { resolveWorkspaceRoot } from './workspace.js'
 
@@ -31,6 +34,7 @@ function installProtocolSection(ctx: GrillContext, config: GrillConfig): void {
     maxQuestionsPerRound: config.maxQuestionsPerRound,
     bypassKeywords: config.bypassKeywords,
     intensity: config.intensity,
+    researchMode: config.researchMode,
   })
   ctx.inject(['systemPrompt'], (scoped: GrillContext) => {
     const systemPrompt = scoped.systemPrompt
@@ -62,6 +66,17 @@ export function apply(ctx: GrillContext, rawConfig: unknown): void {
   const sessions = new SessionRegistry()
   const readConfig = (): GrillConfig => config
   const workspaceRoot = (agent?: GrillAgent): string => resolveWorkspaceRoot(ctx, agent)
+
+  ctx.inject(['configEditor'], scoped => {
+    const editor = scoped.get('configEditor') as ConfigurationEditor
+    if (!editor || typeof editor.entries !== 'function') return
+    installSettingsBridge(scoped, { namespace: () => {
+      const entries = editor.entries().filter(entry => entry.options.name === name)
+      if (entries.length !== 1) throw new Error('设置入口需要唯一的已激活插件实例')
+      // Settings.describe/update use the composed options.id, not a runtime entry id.
+      return entries[0]!.options.id
+    }, projectScope: () => config.memoryScope, settings: createConfigurationSettings(editor, name) })
+  })
 
   ctx.effect(() => {
     const tools = ctx.get('tools') as ToolsService | undefined
@@ -97,6 +112,8 @@ export function apply(ctx: GrillContext, rawConfig: unknown): void {
       }),
     )
 
+    register(createGrillResearchTool(readConfig))
+
     return () => {
       for (const dispose of disposers) {
         try {
@@ -128,7 +145,9 @@ export function apply(ctx: GrillContext, rawConfig: unknown): void {
         bypassKeywords: config.bypassKeywords,
         intensity: config.intensity,
       })
-      return judged.verdict !== 'clear'
+      // 任务明确也不能让旧任务的确认卡继续有效；只保留咨询与普通追问。
+      // 此处只更新门禁代次，不清除会话答案；grill_start 再决定继续或切换任务。
+      return judged.reason !== 'follow-up' && judged.reason !== 'inquiry' && judged.reason !== 'bypass-keyword'
     },
     onWarning: (toolName: string, agentId: string) => {
       ctx.logger?.warn(

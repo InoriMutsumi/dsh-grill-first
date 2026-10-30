@@ -39,6 +39,11 @@ export interface GrillStartResult {
     hint?: string;
     /** 已经追问过的轮数（达到 maxRounds 后不再追问）。 */
     rounds_used?: number;
+    clarification_history?: {
+        answer: string;
+        asked: (keyof import('../judge/heuristics.js').DimensionHit)[];
+    }[];
+    confirmation_required?: boolean;
     /** 当前运行的插件版本（取自 package.json）：用于确认改动是否已随重启生效。 */
     version?: string;
 }

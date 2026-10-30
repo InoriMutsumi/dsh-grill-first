@@ -1,207 +1,113 @@
-/** 两层记忆存储的单测：写入/读取/去重/坏文件容错/清除/摘要长度（工作表 3.1）。 */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import {
-  MAX_HISTORY,
-  SUMMARY_LIMIT,
-  forget,
-  globalMemoryPath,
-  loadMemory,
-  projectMemoryPath,
-  saveHistory,
-  savePreference,
-  saveProjectContext,
-  summarize,
-} from '../dist/memory/store.js'
-
+import { MAX_HISTORY, SUMMARY_LIMIT, forget, globalMemoryPath, loadMemory, projectMemoryPath, saveHistory, savePreference, saveProjectContext, summarize } from '../dist/memory/store.js'
 let home: string
 let workspace: string
 const originalHome = process.env.DSH_GRILL_HOME
-
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'grill-home-'))
   workspace = await mkdtemp(path.join(tmpdir(), 'grill-ws-'))
   process.env.DSH_GRILL_HOME = home
 })
-
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.DSH_GRILL_HOME
   else process.env.DSH_GRILL_HOME = originalHome
   await rm(home, { recursive: true, force: true })
   await rm(workspace, { recursive: true, force: true })
 })
-
-describe('路径解析', () => {
-  it('全局层落在 DSH_GRILL_HOME，项目层落在工作区', () => {
+describe('旧 API 兼容', () => {
+  it('路径与不存在的记忆', async () => {
     expect(globalMemoryPath()).toBe(path.join(home, 'global.json'))
     expect(projectMemoryPath(workspace)).toBe(path.join(workspace, '.dsh', 'grill-first', 'memory.json'))
-  })
-})
-
-describe('写入与读取', () => {
-  it('文件不存在时返回空结构且不报错', async () => {
     const memory = await loadMemory(workspace)
     expect(memory.global.preferences).toEqual([])
     expect(memory.project.project_context).toEqual([])
     expect(memory.project.history).toEqual([])
   })
-
-  it('偏好、项目背景、历史都能落盘并读回', async () => {
+  it('偏好、背景、历史能落盘读回，写入有效 JSON 和真实换行', async () => {
     await savePreference('注释一律用中文', ['语言'], workspace)
-    await saveProjectContext('这是一个 DSH 插件项目', workspace)
+    await saveProjectContext('DSH 插件项目', workspace)
     await saveHistory('做个爬虫', '目标：抓取商品列表', workspace)
-
     const memory = await loadMemory(workspace)
-    expect(memory.global.preferences).toHaveLength(1)
-    expect(memory.global.preferences[0]?.text).toBe('注释一律用中文')
-    expect(memory.global.preferences[0]?.tags).toEqual(['语言'])
-    expect(memory.project.project_context).toEqual(['这是一个 DSH 插件项目'])
-    expect(memory.project.history[0]?.task).toBe('做个爬虫')
-    expect(memory.project.history[0]?.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-
+    expect(memory.global.preferences[0]).toMatchObject({ text: '注释一律用中文', tags: ['语言'] })
+    expect(memory.project.project_context).toEqual(['DSH 插件项目'])
+    expect(memory.project.history[0]).toMatchObject({ task: '做个爬虫', requirements: '目标：抓取商品列表' })
+    expect(memory.project.history[0]?.date).toMatch(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)
     const raw = await readFile(projectMemoryPath(workspace), 'utf8')
-    expect(raw.endsWith('\n')).toBe(true)
+    expect(raw.charCodeAt(raw.length - 1)).toBe(10)
+    expect(JSON.parse(raw).history).toHaveLength(1)
   })
-
-  it('相同偏好去重，且刷新 updated', async () => {
-    await savePreference('回答用中文', ['语言'], workspace)
-    await savePreference('  回答用中文。 ', [], workspace)
+  it('去重真正忽略空白和尾部标点，合并标签；空文本不写入', async () => {
+    await savePreference('回答 用中文', ['语言'], workspace)
+    await savePreference(' 回答用中文。 ', ['格式'], workspace)
+    await savePreference('  ', [], workspace)
+    await saveProjectContext('同一句 话', workspace)
+    await saveProjectContext('同一句话。', workspace)
+    await saveProjectContext(' ', workspace)
     const memory = await loadMemory(workspace)
     expect(memory.global.preferences).toHaveLength(1)
+    expect(memory.global.preferences[0]?.tags).toEqual(['语言', '格式'])
     expect(memory.global.preferences[0]?.updated).toBeGreaterThan(0)
-  })
-
-  it('相同项目背景去重', async () => {
-    await saveProjectContext('同一句话', workspace)
-    await saveProjectContext('同一句话', workspace)
-    const memory = await loadMemory(workspace)
     expect(memory.project.project_context).toHaveLength(1)
   })
-
-  it('历史记录不去重（同任务多次确认是两条记录）', async () => {
-    await saveHistory('任务A', '需求A', workspace)
-    await saveHistory('任务A', '需求A', workspace)
-    const memory = await loadMemory(workspace)
-    expect(memory.project.history).toHaveLength(2)
+  it('历史不去重，并仅保留最近 MAX_HISTORY 条', async () => {
+    await saveHistory('相同任务', '需求', workspace)
+    await saveHistory('相同任务', '需求', workspace)
+    expect((await loadMemory(workspace)).project.history).toHaveLength(2)
+    await forget('project', workspace)
+    for (let i = 0; i < MAX_HISTORY + 5; i++) await saveHistory(`任务 ${i}`, '需求', workspace)
+    const history = (await loadMemory(workspace)).project.history
+    expect(history).toHaveLength(MAX_HISTORY)
+    expect(history[0]?.task).toBe('任务 5')
+    expect(history.at(-1)?.task).toBe(`任务 ${MAX_HISTORY + 4}`)
   })
-
-  it('空文本不写入', async () => {
-    await savePreference('   ', [], workspace)
-    await saveProjectContext('  ', workspace)
-    const memory = await loadMemory(workspace)
-    expect(memory.global.preferences).toHaveLength(0)
-    expect(memory.project.project_context).toHaveLength(0)
+  it('旧读取容错，坏文件写入拒绝且原字节不变', async () => {
+    await writeFile(globalMemoryPath(), 'not json at all')
+    expect((await loadMemory(workspace)).global.preferences).toEqual([])
+    await expect(savePreference('新偏好', [], workspace)).rejects.toMatchObject({ code: 'MEMORY_READ_ERROR' })
+    await expect(forget('global', workspace)).rejects.toMatchObject({ code: 'MEMORY_READ_ERROR' })
+    expect(await readFile(globalMemoryPath(), 'utf8')).toBe('not json at all')
   })
-})
-
-describe('容错', () => {
-  it('坏 JSON 返回空结构而不抛错', async () => {
-    await mkdir(path.dirname(globalMemoryPath()), { recursive: true })
-    await writeFile(globalMemoryPath(), '{ 这不是 JSON', 'utf8')
-    const memory = await loadMemory(workspace)
-    expect(memory.global.preferences).toEqual([])
-  })
-
-  it('结构不对的 JSON 会被补成合法结构', async () => {
-    await mkdir(path.dirname(projectMemoryPath(workspace)), { recursive: true })
-    await writeFile(
-      projectMemoryPath(workspace),
-      JSON.stringify({ project_context: [1, 'ok', ''], history: [{ task: 't' }, 'bad'] }),
-      'utf8',
-    )
+  it('不规范的旧条目读取时被补成合法结构', async () => {
+    const file = projectMemoryPath(workspace)
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, JSON.stringify({ project_context: [1, 'ok', ''], history: [{ task: 't' }, 'bad'] }))
     const memory = await loadMemory(workspace)
     expect(memory.project.project_context).toEqual(['ok'])
-    expect(memory.project.history).toHaveLength(1)
-    expect(memory.project.history[0]?.requirements).toBe('')
+    expect(memory.project.history).toEqual([{ task: 't', requirements: '', date: '' }])
   })
-
-  it('坏文件之后仍能正常追加（自愈）', async () => {
-    await mkdir(path.dirname(globalMemoryPath()), { recursive: true })
-    await writeFile(globalMemoryPath(), 'not json at all', 'utf8')
-    await savePreference('新偏好', [], workspace)
-    const memory = await loadMemory(workspace)
-    expect(memory.global.preferences.map((p) => p.text)).toEqual(['新偏好'])
-  })
-})
-
-describe('forget 与 summarize', () => {
   it('forget 按范围清除', async () => {
     await savePreference('偏好1', [], workspace)
     await saveProjectContext('背景1', workspace)
     await forget('project', workspace)
-    let memory = await loadMemory(workspace)
-    expect(memory.global.preferences).toHaveLength(1)
-    expect(memory.project.project_context).toHaveLength(0)
-
+    expect((await loadMemory(workspace)).global.preferences).toHaveLength(1)
+    expect((await loadMemory(workspace)).project.project_context).toEqual([])
     await forget('all', workspace)
-    memory = await loadMemory(workspace)
-    expect(memory.global.preferences).toHaveLength(0)
+    expect((await loadMemory(workspace)).global.preferences).toEqual([])
   })
-
-  it('summarize 生成中文摘要且不超过上限', () => {
+  it('摘要兼容旧快照、长度受限、折叠空白', () => {
     const memory = {
-      global: {
-        preferences: Array.from({ length: 10 }, (_v, i) => ({
-          text: `偏好条目 ${i}：${'很长的偏好描述'.repeat(6)}`,
-          tags: [],
-          updated: i,
-        })),
-      },
-      project: {
-        project_context: Array.from({ length: 10 }, (_v, i) => `项目背景 ${i}：${'细节'.repeat(20)}`),
-        history: Array.from({ length: 5 }, (_v, i) => ({
-          task: `任务 ${i}`,
-          requirements: '需求'.repeat(50),
-          date: '2026-01-01',
-        })),
-      },
+      global: { preferences: [{ text: '中文\n\t回答', tags: [], updated: 0 }] },
+      project: { project_context: ['背景'.repeat(100)], history: [{ task: '任务', requirements: '需求'.repeat(300), date: '' }] },
     }
     const text = summarize(memory)
-    expect(text).toContain('【全局偏好】')
-    expect(text).toContain('【项目背景】')
-    expect(text).toContain('【历史需求】')
+    expect(text).toContain('中文 回答')
+    for (const title of ['全局偏好', '项目背景', '历史需求']) expect(text).toContain(`【${title}】`)
     expect(text.length).toBeLessThanOrEqual(SUMMARY_LIMIT)
-  })
-
-  it('空记忆的摘要为空串', () => {
     expect(summarize({ global: { preferences: [] }, project: { project_context: [], history: [] } })).toBe('')
   })
-})
-
-describe('0.1.4：memoryScope 与历史裁剪', () => {
-  it("scope=global 时项目层落到全局目录旁的 project.json（换工作区也能读到）", async () => {
-    // 设计上不塞进 global.json：偏好和项目背景分开存，forget 才能按层清。
-    expect(projectMemoryPath(workspace, 'global')).toBe(path.join(path.dirname(globalMemoryPath()), 'project.json'))
-
-    await saveProjectContext('这是一个跨项目通用的约定', workspace, 'global')
-    const otherWorkspace = await mkdtemp(path.join(tmpdir(), 'grill-ws2-'))
-    try {
-      const fromOther = await loadMemory(otherWorkspace, 'global')
-      expect(fromOther.project.project_context).toContain('这是一个跨项目通用的约定')
-      // 默认 project 作用域不受影响
-      const scoped = await loadMemory(workspace)
-      expect(scoped.project.project_context).toEqual([])
-    } finally {
-      await rm(otherWorkspace, { recursive: true, force: true })
-    }
-  })
-
-  it('scope=project（默认）不串到全局文件', async () => {
-    await saveProjectContext('只属于这个项目', workspace)
-    const global = await loadMemory(workspace, 'global')
-    expect(global.project.project_context).toEqual([])
-  })
-
-  it(`历史只保留最近 ${MAX_HISTORY} 条（旧实现无限增长）`, async () => {
-    const total = MAX_HISTORY + 5
-    for (let i = 0; i < total; i += 1) {
-      await saveHistory(`任务 ${i}`, `需求 ${i}`, workspace)
-    }
-    const memory = await loadMemory(workspace)
-    expect(memory.project.history).toHaveLength(MAX_HISTORY)
-    expect(memory.project.history[0]?.task).toBe(`任务 5`)
-    expect(memory.project.history.at(-1)?.task).toBe(`任务 ${total - 1}`)
+  it('global 项目落点跨工作区共享，project 落点隔离，forget 可指定落点', async () => {
+    expect(projectMemoryPath(workspace, 'global')).toBe(path.join(home, 'project.json'))
+    await saveProjectContext('共享背景', workspace, 'global')
+    const otherWorkspace = path.join(workspace, 'other')
+    expect((await loadMemory(otherWorkspace, 'global')).project.project_context).toEqual(['共享背景'])
+    expect((await loadMemory(workspace)).project.project_context).toEqual([])
+    await saveProjectContext('本地背景', workspace)
+    expect((await loadMemory(workspace, 'global')).project.project_context).toEqual(['共享背景'])
+    await forget('project', workspace, 'global')
+    expect((await loadMemory(workspace, 'global')).project.project_context).toEqual([])
+    expect((await loadMemory(workspace)).project.project_context).toEqual(['本地背景'])
   })
 })

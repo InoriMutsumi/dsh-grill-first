@@ -62,19 +62,51 @@ export function hasSpecifics(text) {
 }
 /** 纯 ASCII 关键词（如 skip）的匹配用：把词边界定义成"不是字母/数字/下划线/连字符"。 */
 const ASCII_WORD_CHARS = 'a-z0-9_-';
-/** 单个关键词是否命中：中文按子串，纯英文按词边界（避免 skipList / bypass-keyword 这类标识符误判）。 */
+/** 紧贴在关键词之前的否定词：出现即说明用户是在"拒绝跳过"，不是在"要求跳过"。 */
+const CN_NEGATION_TAIL = /(?:不要|不用|不需要|不必|不许|不准|不可以|不能|禁止|无需|勿|别)\s*$/;
+/** 英文否定：don't skip / do not skip / never skip。 */
+const EN_NEGATION_TAIL = /(?:\b(?:do\s+not|don't|dont|never|not|no))\s*$/i;
+/** 关键词在 index 处是否被紧邻的否定词修饰（"不要直接做"不是"直接做"指令）。 */
+function negatedBefore(lowerText, index) {
+    // 只看 8 个字符内的前缀，且要求否定词紧贴关键词；"不用问，直接做"里的逗号会隔断，不会误伤。
+    const prefix = lowerText.slice(Math.max(0, index - 8), index);
+    return CN_NEGATION_TAIL.test(prefix) || EN_NEGATION_TAIL.test(prefix);
+}
+/**
+ * 单个关键词是否命中：中文按子串，纯英文按词边界（避免 skipList / bypass-keyword 这类标识符误判）。
+ *
+ * 命中后还要看紧邻前缀：被否定词修饰的出现不算命中，否则"不要直接做，先问清楚"会被当成跳过指令，
+ * 与用户的明确授权相反。
+ */
 function matchKeyword(lowerText, keyword) {
     const kw = keyword.trim().toLowerCase();
     if (kw === '')
         return false;
     // 含非 ASCII（中文等）的关键词：没有词边界概念，直接子串匹配
     // eslint-disable-next-line no-control-regex
-    if (!/^[\x20-\x7e]+$/.test(kw))
-        return lowerText.includes(kw);
+    if (!/^[\x20-\x7e]+$/.test(kw)) {
+        let from = 0;
+        while (true) {
+            const index = lowerText.indexOf(kw, from);
+            if (index < 0)
+                return false;
+            if (!negatedBefore(lowerText, index))
+                return true;
+            from = index + kw.length;
+        }
+    }
     const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^${ASCII_WORD_CHARS}])${escaped}($|[^${ASCII_WORD_CHARS}])`).test(lowerText);
+    const pattern = new RegExp(`(^|[^${ASCII_WORD_CHARS}])${escaped}($|[^${ASCII_WORD_CHARS}])`, 'g');
+    let match;
+    while ((match = pattern.exec(lowerText)) !== null) {
+        const index = match.index + (match[1]?.length ?? 0);
+        if (!negatedBefore(lowerText, index))
+            return true;
+        pattern.lastIndex = index + kw.length;
+    }
+    return false;
 }
-/** 是否命中用户显式跳过词（R4）。 */
+/** 是否命中用户显式跳过词（R4）。被否定词修饰的出现（"不要直接做"）不算命中。 */
 export function hasBypassKeyword(text, keywords) {
     const lower = text.toLowerCase();
     return keywords.some((keyword) => matchKeyword(lower, keyword));
@@ -90,11 +122,20 @@ export function isFollowUpMessage(text) {
     return !ACTION_VERB.test(withoutLead);
 }
 /** 由缺失维度生成追问提示。 */
-export function buildFocusHints(hit, extra = []) {
+export function buildFocusHints(hit, extra = [], text = '') {
+    const tailored = /爬虫|抓取|采集|scrap/i.test(text)
+        ? { scope: '范围不明确：采集哪个来源、哪些字段和多少条数据？', constraint: '约束不明确：访问权限、频率限制和输出格式是什么？', acceptance: '验收标准缺失：用哪份样本核对字段、完整性和去重结果？' }
+        : /修复|报错|bug|fix/i.test(text)
+            ? { scope: '范围不明确：问题发生在哪个模块，怎样复现？', constraint: '约束不明确：运行环境、版本及兼容限制是什么？', acceptance: '验收标准缺失：预期行为是什么，用哪个复现用例验证修复？' }
+            : /报告|周报|文章|文案|写作|ppt|幻灯|write/i.test(text)
+                ? { scope: '范围不明确：面向谁、涵盖哪些材料，篇幅和交付格式是什么？', constraint: '约束不明确：语气、引用来源和截止时间有什么要求？', acceptance: '验收标准缺失：读者需要理解什么或做出什么决定？' }
+                : /页面|界面|设计|UI|design/i.test(text)
+                    ? { scope: '范围不明确：面向哪些用户、页面和关键操作流程？', constraint: '约束不明确：平台、视觉参考和现有组件有哪些限制？', acceptance: '验收标准缺失：哪些操作应可完成，如何核对布局和交互？' }
+                    : {};
     const hints = [];
     for (const key of ['goal', 'scope', 'constraint', 'acceptance']) {
         if (!hit[key])
-            hints.push(DIMENSION_HINTS[key]);
+            hints.push(tailored[key] ?? DIMENSION_HINTS[key]);
     }
     return [...extra, ...hints].slice(0, 4);
 }
@@ -108,6 +149,9 @@ export function isInquiry(text) {
     const flat = text.trim();
     if (flat === '')
         return false;
+    if (/^(?:请问|想问|解释一下|解释|说明一下|如何|怎样|怎么|为什么|why\b|how\s+(?:to|does|do|can\s+i)\b)/i.test(flat)
+        && !/(帮我|替我|请你|然后|并且|顺便).*(实现|改|写|修复|安装|部署)/.test(flat))
+        return true;
     if (WRITE_SIGNAL.test(flat))
         return false;
     return QUESTION_TAIL.test(flat) || INQUIRY_LEAD.test(flat);
@@ -150,7 +194,7 @@ export function judgeTask(input) {
     }
     if (input.mode === 'drift-check') {
         const drift = DRIFT_MARKERS.test(text);
-        if (satisfied >= threshold.dims && text.length >= 20) {
+        if (satisfied >= threshold.dims && (!threshold.needAcceptance || dimensions.acceptance) && text.length >= 20) {
             return { verdict: 'clear', score, focus_hints: [], dimensions, reason: 'drift-well-specified' };
         }
         return {
@@ -175,13 +219,13 @@ export function judgeTask(input) {
     if (satisfied >= threshold.dims && (!threshold.needAcceptance || dimensions.acceptance)) {
         return { verdict: 'clear', score, focus_hints: [], dimensions, reason: 'dimensions-covered' };
     }
-    if (satisfied === 2 && (hasSpecifics(text) || TRANSFORM_PATTERN.test(text))) {
+    if (satisfied === 2 && (!threshold.needAcceptance || dimensions.acceptance) && (hasSpecifics(text) || TRANSFORM_PATTERN.test(text))) {
         return { verdict: 'clear', score, focus_hints: [], dimensions, reason: 'small-explicit-task' };
     }
     return {
         verdict: 'needs-clarification',
         score,
-        focus_hints: buildFocusHints(dimensions),
+        focus_hints: buildFocusHints(dimensions, [], text),
         dimensions,
         reason: 'dimensions-missing',
     };

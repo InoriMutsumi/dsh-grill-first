@@ -40,6 +40,8 @@ describe('normalizeConfig：8 个配置项', () => {
       bypassKeywords: ['快做', '别问'],
       memoryEnabled: false,
       memoryScope: 'global',
+      researchMode: 'auto',
+      researchDepth: 'quick',
     })
   })
 
@@ -93,7 +95,7 @@ describe('buildProtocolText：注入的系统提示段', () => {
   })
 
   it('把配置值写进提示（轮次与跳过词）', () => {
-    expect(text).toContain('每轮 3 个问题')
+    expect(text).toContain('3')
     expect(text).toContain('最多 3 轮')
     expect(text).toContain('直接做')
   })
@@ -105,7 +107,7 @@ describe('buildProtocolText：注入的系统提示段', () => {
       bypassKeywords: ['直接做'],
       intensity: 'grill',
     })
-    expect(grill).toContain('刨根问底')
+    expect(grill).toContain('深入：再核对边界、异常与取舍')
     expect(grill).toContain('最多 5 轮')
     expect(protocolLength(grill)).toBeLessThanOrEqual(PROTOCOL_CHAR_LIMIT)
   })

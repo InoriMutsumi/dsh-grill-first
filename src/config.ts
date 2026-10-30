@@ -33,6 +33,8 @@ export interface GrillConfig {
   memoryEnabled: boolean
   /** 项目层记忆落在哪里（0.1.4 新增：有些项目不想被写进 .dsh/）。 */
   memoryScope: MemoryScope
+  researchMode: 'off' | 'auto' | 'always'
+  researchDepth: 'quick' | 'deep'
 }
 
 /** 默认配置（与工作表 3.7 的默认值一致）。 */
@@ -45,6 +47,8 @@ export const DEFAULT_CONFIG: GrillConfig = {
   bypassKeywords: [...DEFAULT_BYPASS_KEYWORDS],
   memoryEnabled: true,
   memoryScope: 'project',
+  researchMode: 'auto',
+  researchDepth: 'quick',
 }
 
 /** 取整并夹到 [min, max]；非法值返回 fallback。 */
@@ -95,5 +99,7 @@ export function normalizeConfig(raw: unknown): GrillConfig {
     bypassKeywords: pickStringList(input.bypassKeywords, DEFAULT_CONFIG.bypassKeywords),
     memoryEnabled: pickBoolean(input.memoryEnabled, DEFAULT_CONFIG.memoryEnabled),
     memoryScope: pickEnum(input.memoryScope, ['project', 'global'] as const, DEFAULT_CONFIG.memoryScope),
+    researchMode: pickEnum(input.researchMode, ['off', 'auto', 'always'] as const, DEFAULT_CONFIG.researchMode),
+    researchDepth: pickEnum(input.researchDepth, ['quick', 'deep'] as const, DEFAULT_CONFIG.researchDepth),
   }
 }

@@ -43,6 +43,8 @@ export declare function decideGate(input: {
 /** 每个 agent 的门禁状态表（agent 级隔离）。 */
 export declare class GateRegistry {
     private readonly states;
+    private readonly revisions;
+    revisionOf(agentId: string): number;
     /** 读取状态；未登记的 agent 默认 closed（新会话即"未确认"）。 */
     stateOf(agentId: string): GateState;
     /** 放行该 agent。 */

@@ -15,6 +15,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     maxRounds: z<number, number, "defined">;
     intensity: z<"gentle" | "standard" | "grill", "gentle" | "standard" | "grill", "defined">;
     bypassKeywords: z<string[], string[], "defined">;
+    researchMode: z<"off" | "auto" | "always", "off" | "auto" | "always", "defined">;
+    researchDepth: z<"quick" | "deep", "quick" | "deep", "defined">;
     memoryEnabled: z<boolean, boolean, "defined">;
     memoryScope: z<"project" | "global", "project" | "global", "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
@@ -24,6 +26,8 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     maxRounds: z<number, number, "defined">;
     intensity: z<"gentle" | "standard" | "grill", "gentle" | "standard" | "grill", "defined">;
     bypassKeywords: z<string[], string[], "defined">;
+    researchMode: z<"off" | "auto" | "always", "off" | "auto" | "always", "defined">;
+    researchDepth: z<"quick" | "deep", "quick" | "deep", "defined">;
     memoryEnabled: z<boolean, boolean, "defined">;
     memoryScope: z<"project" | "global", "project" | "global", "defined">;
 }>>, "plain">;

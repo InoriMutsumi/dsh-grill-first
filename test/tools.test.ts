@@ -104,7 +104,7 @@ describe('grill_start', () => {
   })
 
   it('把已确认的全局偏好带进 memory_context（R5）', async () => {
-    const { grillStart, grillConfirm } = makeDeps()
+    const { grillStart, grillConfirm } = makeDeps({}, async () => ({ answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }] }))
     await grillConfirm.execute(
       { requirements: '目标：改错别字\n范围：只改 README\n约束：用中文\n验收标准：跑通检查', preferences_learned: ['注释一律用中文'], confirmed: true },
       execCtx(),
@@ -114,7 +114,7 @@ describe('grill_start', () => {
   })
 
   it('memoryEnabled=false 时不读记忆', async () => {
-    const { grillStart, grillConfirm } = makeDeps({ memoryEnabled: false })
+    const { grillStart, grillConfirm } = makeDeps({ memoryEnabled: false }, async () => ({ answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }] }))
     await grillConfirm.execute(
       { requirements: '目标：X\n范围：Y\n约束：Z\n验收：跑通', preferences_learned: ['偏好P'], confirmed: true },
       execCtx(),
@@ -179,7 +179,7 @@ describe('grill_confirm', () => {
     expect(card.detail).not.toContain('清单过长')
   })
 
-  it('确认卡片：正文超过 6000 字时截断并提示', async () => {
+  it('确认卡片：正文超过 6000 字时拒绝并要求分段摘要', async () => {
     const ask = vi.fn(async (_request: unknown) => ({
       answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }],
     }))
@@ -188,12 +188,11 @@ describe('grill_confirm', () => {
 
     await grillConfirm.execute({ requirements }, execCtx())
 
-    const card = (ask.mock.calls[0]?.[0] as { questions: { question: string; detail: string }[] }).questions[0]!
-    expect(card.question).toBe('目标：做个爬虫')
-    expect(card.detail).toContain('清单过长，此处已截断')
-    expect(card.detail).toContain('确认后我才会开工')
-    expect(card.detail.length).toBeLessThan(6200) // 正文上限 6000 + 提示语
-    expect(card.detail).not.toContain('验收标准：单测全绿') // 超出上限的部分确实被截掉
+    expect(ask).not.toHaveBeenCalled()
+    const result = await grillConfirm.execute({ requirements, confirmed: true }, execCtx()) as Record<string, unknown>
+    expect(result.confirmed).toBe(false)
+    expect(result.reason).toBe('requirements-too-long')
+    expect(result.instructions).toContain('分段')
   })
 
   it('确认卡片：清单不长时标题就是清单首行，正文原样带提示', async () => {
@@ -233,8 +232,11 @@ describe('grill_confirm', () => {
     expect(gates.stateOf('agent-1')).toBe('closed')
   })
 
-  it('confirmed:true 兜底通道：直接放行并落库', async () => {
+  it('confirmed:true 兜底通道：同一会话同一清单取得兜底后放行并落库', async () => {
     const { grillConfirm, gates } = makeDeps()
+    const pending = await grillConfirm.execute({ requirements: '目标：X\n范围：Y\n约束：Z\n验收标准：跑通' }, execCtx()) as Record<string, unknown>
+    expect(pending.needs_user_confirmation).toBe(true)
+    expect(gates.stateOf('agent-1')).toBe('closed')
     const result = (await grillConfirm.execute(
       { requirements: '目标：X\n范围：Y\n约束：Z\n验收标准：跑通', confirmed: true },
       execCtx(),
@@ -259,7 +261,7 @@ describe('grill_confirm', () => {
   })
 
   it('R3 红线：需求清单只进记忆，不产生任何需求文件', async () => {
-    const { grillConfirm } = makeDeps()
+    const { grillConfirm } = makeDeps({}, async () => ({ answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }] }))
     const requirements = '目标：做一个爬虫\n范围：只抓商品列表\n约束：用 Python\n验收标准：输出 CSV'
     await grillConfirm.execute({ requirements, confirmed: true }, execCtx())
 
@@ -272,7 +274,7 @@ describe('grill_confirm', () => {
   })
 
   it('确认后会话态被清理（同一 agent 不会重复确认）', async () => {
-    const { grillConfirm, sessions } = makeDeps()
+    const { grillConfirm, sessions } = makeDeps({}, async () => ({ answers: [{ id: 'grill-confirm', selected: ['确认，按此开工'] }] }))
     await grillConfirm.execute({ requirements: '目标：X', confirmed: true }, execCtx())
     expect(sessions.get('agent-1')).toBeUndefined()
   })

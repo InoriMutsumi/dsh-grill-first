@@ -24,11 +24,15 @@ export const Config = z.object({
         .default(3)
         .description('每轮最多问几个问题（1-6）。'),
     maxRounds: z.natural().max(10).default(3).description('最多追问几轮（1-10）。'),
-    intensity: intensitySchema.description('追问力度：gentle 只问关键点 / standard 标准 / grill 刨根问底。'),
+    intensity: intensitySchema.description('追问力度：gentle 快速（关键歧义）/ standard 标准（主流程与验收）/ grill 深入（重要边界与异常）。'),
     bypassKeywords: z
         .array(z.string())
         .default([...DEFAULT_BYPASS_KEYWORDS])
         .description('跳过关键词：用户消息里出现这些词就不再追问，直接开工。'),
+    researchMode: z.union([z.const('off'), z.const('auto'), z.const('always')]).default('auto')
+        .description('GitHub 调研：off 关闭 / auto 按软件任务需要 / always 对适用任务主动调研；不会自动安装候选库。'),
+    researchDepth: z.union([z.const('quick'), z.const('deep')]).default('quick')
+        .description('调研深度：quick 快速比较 / deep 补充 README、许可证与版本证据。'),
     memoryEnabled: z.boolean().default(true).description('是否启用两层记忆（全局偏好 + 项目背景/历史）。'),
     memoryScope: z
         .union([z.const('project'), z.const('global')])

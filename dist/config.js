@@ -15,6 +15,8 @@ export const DEFAULT_CONFIG = {
     bypassKeywords: [...DEFAULT_BYPASS_KEYWORDS],
     memoryEnabled: true,
     memoryScope: 'project',
+    researchMode: 'auto',
+    researchDepth: 'quick',
 };
 /** 取整并夹到 [min, max]；非法值返回 fallback。 */
 function clampInt(value, min, max, fallback) {
@@ -61,5 +63,7 @@ export function normalizeConfig(raw) {
         bypassKeywords: pickStringList(input.bypassKeywords, DEFAULT_CONFIG.bypassKeywords),
         memoryEnabled: pickBoolean(input.memoryEnabled, DEFAULT_CONFIG.memoryEnabled),
         memoryScope: pickEnum(input.memoryScope, ['project', 'global'], DEFAULT_CONFIG.memoryScope),
+        researchMode: pickEnum(input.researchMode, ['off', 'auto', 'always'], DEFAULT_CONFIG.researchMode),
+        researchDepth: pickEnum(input.researchDepth, ['quick', 'deep'], DEFAULT_CONFIG.researchDepth),
     };
 }

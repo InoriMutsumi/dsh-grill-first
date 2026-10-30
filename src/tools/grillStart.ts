@@ -6,7 +6,7 @@
  */
 import type { GrillConfig, MemoryScope } from '../config.js'
 import type { GateRegistry } from '../gate/preExecute.js'
-import { judgeTask } from '../judge/heuristics.js'
+import { buildFocusHints, detectDimensions, judgeTask } from '../judge/heuristics.js'
 import { loadMemory, summarize } from '../memory/store.js'
 import type { GrillAgent, ToolDefinition, ToolRunContext } from '../types.js'
 import { PLUGIN_VERSION } from '../version.js'
@@ -42,6 +42,8 @@ export interface GrillStartResult {
   hint?: string
   /** 已经追问过的轮数（达到 maxRounds 后不再追问）。 */
   rounds_used?: number
+  clarification_history?: { answer: string; asked: (keyof import('../judge/heuristics.js').DimensionHit)[] }[]
+  confirmation_required?: boolean
   /** 当前运行的插件版本（取自 package.json）：用于确认改动是否已随重启生效。 */
   version?: string
 }
@@ -60,13 +62,15 @@ const PARAMETERS: Record<string, unknown> = {
   properties: {
     task: {
       type: 'string',
-      description: '任务原文或任务摘要（必填）：把用户这句话原样贴进来，不要自己改写。',
+      description: '新任务/变更时传用户任务原文；continue 时传当前任务原文，上一轮答案另放 answer_summary。',
     },
     mode: {
       type: 'string',
-      enum: ['new-task', 'drift-check'],
-      description: 'new-task=开工前的常规判定（默认）；drift-check=任务中途用户大改目标/范围时的重新判定。',
+      enum: ['new-task', 'drift-check', 'continue'],
+      description: 'new-task（默认）开始独立任务；drift-check 重置变更后的任务；continue 记录当前任务一轮问答并重新评估。',
     },
+    answer_summary: { type: 'string', maxLength: 4000, description: 'continue 时填写上一轮用户答案摘要，与 asked_dimensions 同传；不要把假设写成用户答案。' },
+    asked_dimensions: { type: 'array', uniqueItems: true, items: { type: 'string', enum: ['goal', 'scope', 'constraint', 'acceptance'] }, description: '上一轮实际问过的维度；仅与非空 answer_summary 一起提交才计一轮。' },
   },
   required: ['task'],
   additionalProperties: false,
@@ -107,13 +111,13 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
       '开工前的需求判定（grill-first 插件）。任何新任务开始前先调用一次，把任务原文传进来：返回 verdict=clear 就直接开工；返回 needs-clarification 就按 focus_hints 用 ask_user_question 多轮追问，问清后用 grill_confirm 请用户确认。',
     parameters: PARAMETERS,
     output: textOutput(OUTPUT_SCHEMA),
-    isConcurrencySafe: () => true,
+    isConcurrencySafe: () => false,
     async execute(rawArgs: unknown, exec: ToolRunContext): Promise<GrillStartResult> {
-      const args = (rawArgs ?? {}) as { task?: unknown; mode?: unknown }
+      const args = (rawArgs ?? {}) as { task?: unknown; mode?: unknown; answer_summary?: unknown; asked_dimensions?: unknown }
       const config = deps.config()
       const agentId = exec?.agent?.id ?? ''
       const task = typeof args.task === 'string' ? args.task.trim() : ''
-      const mode = args.mode === 'drift-check' ? 'drift-check' : 'new-task'
+      const mode = args.mode === 'continue' ? 'continue' : args.mode === 'drift-check' ? 'drift-check' : 'new-task'
 
       if (!config.enabled) {
         return { verdict: 'clear', skip: true, reason: 'disabled', version: PLUGIN_VERSION }
@@ -130,14 +134,20 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
       }
 
       const judged = judgeTask({
-        text: task,
-        mode,
+        text: mode === 'continue' && typeof args.answer_summary === 'string' ? `${task}\n${args.answer_summary}` : task,
+        mode: mode === 'continue' ? 'new-task' : mode,
         bypassKeywords: config.bypassKeywords,
         intensity: config.intensity,
       })
       const previous = deps.sessions.get(agentId)
 
-      if (judged.verdict === 'clear') {
+      // drift-check 是用户显式切换任务：必须重置会话，不能被 inquiry/follow-up 判定保留旧任务。
+      const preserving = !!previous && mode !== 'drift-check' && (mode === 'continue' || judged.reason === 'follow-up' || judged.reason === 'inquiry')
+      if (mode === 'continue' && !previous) {
+        deps.gates.close(agentId)
+        return { verdict: 'needs-clarification', skip: false, reason: 'no-active-task', gate_state: 'closed', hint: '没有待澄清任务，请用 new-task 提交任务原文。' }
+      }
+      if (judged.verdict === 'clear' && (!preserving || judged.reason === 'bypass-keyword')) {
         deps.sessions.end(agentId)
         deps.gates.open(agentId)
         return {
@@ -151,26 +161,25 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
         }
       }
 
-      const startedAt = Date.now()
-      // maxRounds 兜底：问够轮数就不再问，直接按当前理解开工（0.1.4 修：以前这个配置项根本没生效）。
-      const roundsUsed = previous?.rounds ?? 0
-      if (roundsUsed >= config.maxRounds) {
-        deps.sessions.end(agentId)
-        deps.gates.open(agentId)
-        return {
-          verdict: 'clear',
-          skip: true,
-          reason: 'max-rounds-reached',
-          score: judged.score,
-          gate_state: 'open',
-          mode,
-          rounds_used: roundsUsed,
-          hint: `已经追问 ${roundsUsed} 轮（上限 ${config.maxRounds}），按当前理解直接开工；有歧义就先做最小可验证版本。`,
-          version: PLUGIN_VERSION,
-        }
-      }
-      deps.sessions.start({ agentId, task, mode, startedAt, rounds: roundsUsed })
+      const startedAt = preserving ? previous!.startedAt : Date.now()
+      if (!preserving) deps.sessions.start({ agentId, task, mode: mode === 'drift-check' ? mode : 'new-task', startedAt, rounds: 0 })
       deps.gates.close(agentId)
+      const answer = typeof args.answer_summary === 'string' ? args.answer_summary.trim() : ''
+      const keys = ['goal', 'scope', 'constraint', 'acceptance'] as const
+      const asked = Array.isArray(args.asked_dimensions)
+        ? keys.filter((key) => args.asked_dimensions instanceof Array && args.asked_dimensions.includes(key)) : []
+      if (mode === 'continue' && (answer.length > 4000 || (!!answer !== (asked.length > 0)))) {
+        return { verdict: 'needs-clarification', skip: false, reason: 'invalid-continuation', gate_state: 'closed', hint: '答案摘要须不超过4000字，并与上一轮实际提问维度同时提供；未记录本轮。' }
+      }
+      if (mode === 'continue') deps.sessions.recordAnswer(agentId, answer, asked, config.maxRounds)
+      const session = deps.sessions.get(agentId)
+      const roundsUsed = session?.rounds ?? 0
+      const combined = [session?.task ?? task, ...(session?.history ?? []).map((round) => round.answer)].join('\n')
+      const evaluated = judgeTask({ text: combined, mode: 'new-task', intensity: config.intensity, bypassKeywords: [] })
+      const atLimit = roundsUsed >= config.maxRounds
+      const ready = preserving && evaluated.verdict === 'clear'
+      const dimensions = detectDimensions(combined)
+      const focus = atLimit || ready ? [] : buildFocusHints(dimensions, [], session?.task ?? task)
 
       let memoryContext = ''
       if (config.memoryEnabled) {
@@ -185,10 +194,15 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
       return {
         verdict: 'needs-clarification',
         skip: false,
-        reason: judged.reason,
-        score: judged.score,
+        reason: atLimit ? 'max-rounds-reached' : ready ? 'confirmation-required' : preserving ? 'clarification-pending' : judged.reason,
+        score: evaluated.score,
         memory_context: memoryContext,
-        focus_hints: judged.focus_hints,
+        focus_hints: focus,
+        hint: judged.reason === 'inquiry' && preserving
+          ? '先回答当前咨询，再回到待确认任务；咨询不代表同意开工。'
+          : atLimit || ready || focus.length === 0
+            ? '停止追问，把需求及尚未验证的假设整理成四段清单，调用 grill_confirm；确认前不得开工。'
+            : '结合已知偏好和已有答案，只问仍影响方案的歧义；问题数是上限，不必凑数。每轮回答后用 continue 记录答案摘要与实际问过的维度。',
         gate_state: 'closed',
         max_rounds: config.maxRounds,
         max_questions_per_round: config.maxQuestionsPerRound,
@@ -196,6 +210,8 @@ export function createGrillStartTool(deps: GrillStartDeps): ToolDefinition {
         mode,
         task_id: `${agentId}:${startedAt}`,
         rounds_used: roundsUsed,
+        clarification_history: session?.history ?? [],
+        confirmation_required: true,
         version: PLUGIN_VERSION,
         ...(previous?.task ? { previous_task: previous.task } : {}),
       }

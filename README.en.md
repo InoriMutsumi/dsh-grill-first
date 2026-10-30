@@ -1,166 +1,132 @@
 # dsh-grill-first
 
-![tests](https://img.shields.io/badge/tests-127%20passing-brightgreen)
-![license](https://img.shields.io/badge/license-MIT-blue)
-![DSH plugin](https://img.shields.io/badge/DSH-plugin-blueviolet)
+> A DSH (DeepSeek Harness) plugin that clarifies vague requests and asks you to confirm the requirements before starting work.
 
-> A [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/dsh) plugin that **interviews you before it starts working**: vague requests get clarified first, and the main task only starts once you confirm the summary.
+[中文](./README.md) · [Configuration](#configuration) · [Two-layer memory](#two-layer-memory)
 
-**Ask an agent to "optimize that page" and it will pick a page, pick a meaning of "optimize", and finish the job. Sometimes it picks the wrong page.**
-
-[中文](./README.md) · [Install](#install) · [Configuration](#configuration) · [Known limitations](#known-limitations)
-
-## One conversation
-
-```text
-you  optimize that page
-
-it   1) Which page? 2) "Optimize" meaning speed, style or copy?
-     3) How do we know it's done?
-
-you  the login page, mostly styling. The alignment and spacing look off.
-
-it   GOAL      tidy up the login page's visuals
-     SCOPE     styling only; structure and copy stay as-is
-     CONSTRAINTS use the existing design tokens
-     ACCEPTANCE key screens don't break on mobile
-                          [ Confirm and start ]  [ Change something ]
-
-you  confirm
-
-it   (only now does it touch anything)
-```
-
-Without the plugin, the same sentence usually goes like this:
-
-```text
-you  optimize that page
-
-it   Done! I've updated the homepage copy and color scheme ✨   ← you meant the login page
-```
-
-## The four gate modes
-
-| | No plugin | `gateMode: warn` (default) | `gateMode: ask` | `gateMode: strict` |
-|---|---|---|---|---|
-| Vague request | Guesses and starts | Asks; actions not blocked | Asks; one confirmation card before acting | Asks; blocks writes and commands until confirmed |
-
-`warn` is the default so upgrading never silently freezes a workflow you already had.
+This document describes the V1 (1.0.0) working-tree implementation. It does not establish that V1 has been released, installed, or verified in the host UI.
 
 ## How it works
 
-Every new task starts with a check, not with work:
+1. The model sends the original task to `grill_start`, which checks the goal, scope, constraints and acceptance criteria.
+2. For vague tasks, it asks only about ambiguities that affect the solution: up to 3 questions per round and 3 rounds by default. Each answer is recorded with `mode: continue`, an answer summary and the dimensions actually asked about.
+3. Once enough information is available or the round limit is reached, it stops asking and submits a four-part summary, including unverified assumptions, to `grill_confirm`. **Reaching the limit still requires confirmation; it never automatically opens the gate.**
+4. “Confirm and start” releases the task; “Change something” leads to a revised summary and another confirmation.
+5. Clear small tasks and new tasks containing bypass keywords can proceed directly. Questions and follow-ups during clarification do not substitute for task confirmation.
 
-1. The model passes your request to `grill_start`.
-2. If it's missing goal / scope / constraints / acceptance criteria, the plugin asks up to 3 questions per round, 3 rounds max, each round built on your previous answer.
-3. Once the picture is clear, `grill_confirm` hands you a four-part summary (goal / scope / constraints / acceptance criteria).
-4. "Confirm" releases the task; "change something" makes it revise and ask again.
-5. One-liners and questions don't trigger any of this, and neither do messages containing `直接做`, `跳过提问`, `不用问`, `skip`, `skip the questions`, `just do it`.
+For “optimize that page”, clarify which page, what changes are in scope, and what counts as done:
 
-## Install
+```text
+GOAL: Tidy up the login page's visuals
+SCOPE: Styling only; preserve structure and copy
+CONSTRAINTS: Use the existing design tokens
+ACCEPTANCE: Key screens do not break on mobile
+[Confirm and start] [Change something]
+```
 
-Quit any running task first. Any of these works:
+## Three tools
 
-**Plugin marketplace (recommended):** DSH settings → Plugins → search `dsh-grill-first`.
+| Tool | Purpose |
+|---|---|
+| `grill_start` | Determines whether clarification is needed; returns focus hints, rounds, answer history and `memory_context` |
+| `grill_confirm` | Displays the requirements; explicit confirmation opens the gate and saves history/preferences when memory is enabled |
+| `grill_research` | Queries open-source candidates and source evidence using public technical keywords after requirements are clear; never installs or executes candidate code |
 
-**npm**
+`grill_confirm` prefers the host's structured question service. If that service is unavailable or throws, it returns `needs_user_confirmation: true`; the model must show the complete summary through the built-in question tool and obtain explicit agreement before submitting `confirmed: true`. This declaration is accepted only after **the same session and identical summary actually entered the fallback channel**. Passing `true` directly does not bypass a working structured question service. Summaries exceeding 6000 characters are rejected and must first be condensed while preserving all constraints and acceptance criteria.
+
+## Gate modes
+
+| `gateMode` | Before requirements are confirmed |
+|---|---|
+| `off` | Does not block tools; does not disable the entire plugin |
+| `warn` (default) | Logs the unconfirmed state and allows tools |
+| `ask` | Requests host approval for each mutating call; approval of one operation does not authorize the whole task |
+| `strict` | Rejects mutating calls until requirements are confirmed or explicitly bypassed |
+
+The gate applies to root agents. Read-only tools remain available; writes, commands and delegation tools are controlled. Returning an approval request is not evidence of approval. In `ask` mode, later mutations still require approval until a valid flow such as `grill_confirm` opens the task gate.
+
+Set `enabled: false` to disable clarification, gating and research. Default bypass keywords are `直接做`, `跳过提问`, `不用问` and `skip`. English keywords match word boundaries; Chinese keywords match substrings. Immediately preceding negation, such as `不要直接做` or `don't skip`, prevents that occurrence from acting as a bypass. These are keyword heuristics, not full semantic understanding; complex negation and quotations can still be misclassified.
+
+## Installation
+
+Use DSH plugin management to install a selected version, or the CLI:
 
 ```bash
 dsh plugin --profile <your-profile> add dsh-grill-first
+# Development build: use the actual local package path
+dsh plugin --profile <your-profile> add /absolute/path/dsh-grill-first-1.0.0.tgz
 ```
 
-**From source**
-
-```bash
-dsh plugin --profile <your-profile> add github:InoriMutsumi/dsh-grill-first
-```
-
-Live profiles hot-load the plugin, so no restart is needed (restart DSH once if it doesn't show up).
-
-## What you get
-
-- **A protocol paragraph** injected into the system prompt (~600 chars) telling the model to run `grill_start` before new work. If you can see `【开工前提问协议（grill-first）】` in the prompt, it's installed.
-- **Two tools:**
-
-| Tool | What it does |
-|---|---|
-| `grill_start` | Decides whether the request needs clarification. Returns `verdict`, `focus_hints` (what to ask), and `memory_context` (preferences you already confirmed, so it doesn't ask twice) |
-| `grill_confirm` | Hands you the four-part summary; on confirmation releases the task and saves what you confirmed |
-
-## When you don't want to be asked
-
-- Put `直接做`, `跳过提问`, `不用问`, `skip`, `skip the questions` or `just do it` in the message → it starts immediately.
-- Asks a question ("how is this plugin", "check my repos", "explain this code") → treated as a question, not a task, so nothing is clarified.
-- Or turn `enabled` off / set `gateMode: off` in the config → fully silent.
+These are installation examples; the registry default is not necessarily the V1 described here. Check the installation result's application status. Editing repository sources does not update a running installed copy.
 
 ## Configuration
 
-DSH settings → Plugins → dsh-grill-first, eight options:
+V1 provides a separate **DSH Settings → 需求澄清 (Requirements clarification)** page with ten options for the current plugin instance. The page needs the host's settings, connection and workspace services; loading and saving must still be checked after deployment.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `enabled` | boolean | `true` | Master switch. Off = no questions, no gate |
-| `gateMode` | `off` / `warn` / `ask` / `strict` | `warn` | `off` never blocks; `warn` only logs; `ask` shows one confirmation card; `strict` blocks mutating tools until confirmed |
-| `maxQuestionsPerRound` | 1–6 | `3` | Questions per round |
-| `maxRounds` | 1–10 | `3` | Max clarification rounds; on the last round `grill_start` passes the task through |
-| `intensity` | `gentle` / `standard` / `grill` | `standard` | How much detail counts as clear: `gentle` needs two dimensions, `standard` three, `grill` also requires acceptance criteria |
-| `bypassKeywords` | string[] | `["直接做","跳过提问","不用问","skip"]` | Hit any of these → skip the interview |
-| `memoryEnabled` | boolean | `true` | Enable the two-layer memory |
-| `memoryScope` | `project` / `global` | `project` | Where project context lives: in the workspace, or in the global directory shared across projects |
+| `enabled` | boolean | `true` | Master switch |
+| `gateMode` | `off` / `warn` / `ask` / `strict` | `warn` | Gate behavior described above |
+| `maxQuestionsPerRound` | 1–6 | `3` | Maximum questions per round |
+| `maxRounds` | 1–10 | `3` | Round limit; the summary still requires confirmation |
+| `intensity` | `gentle` / `standard` / `grill` | `standard` | Clarity threshold: two dimensions / three / additionally requires acceptance criteria |
+| `bypassKeywords` | string[] | `["直接做","跳过提问","不用问","skip"]` | Matching tasks bypass clarification |
+| `memoryEnabled` | boolean | `true` | Enables automatic reads during clarification and writes on confirmation |
+| `memoryScope` | `project` / `global` | `project` | Stores project memory in the workspace or global directory |
+| `researchMode` | `off` / `auto` / `always` | `auto` | Disabled / query when applicable / attempt a query on every tool invocation |
+| `researchDepth` | `quick` / `deep` | `quick` | Request budget and excerpt depth |
 
-### Editing the config
-
-The plugin page only offers an enable/disable toggle, so edit the profile's patch layer, `<profile>/cordis.patch.yml`:
+All options are editable on the page, with one bypass keyword per line. The profile's `cordis.patch.yml` can also configure the plugin entry; specify only the options to override:
 
 ```yaml
 - id: dsh-grill-first
   name: dsh-grill-first
   config:
-    gateMode: ask
-    maxQuestionsPerRound: 3
+    gateMode: strict
     maxRounds: 3
-    intensity: standard
-    memoryEnabled: true
-    memoryScope: project
-    bypassKeywords: [直接做, 跳过提问, 不用问, skip]
+    researchMode: auto
+    researchDepth: quick
 ```
 
-Only the keys you set are overridden; the rest keep their defaults. Config changes hot-reload, code changes need a DSH restart.
+### Preference management
+
+The same page supports listing, adding, editing, enabling, disabling and deleting global or project preferences. Edit text and tags and inspect provenance. Project preferences require a valid workspace registered with the host. Disabled preferences are omitted from future summaries; the page asks before deletion.
+
+Saves check revisions for concurrent changes. Reload before editing again if a conflict occurs; malformed memory files are not silently overwritten. The management channel accepts only the host owner's browser and is not an LLM preference-writing tool. Turning `memoryEnabled` off stops automatic reads/writes but still permits managing existing preferences on the page.
 
 ## Two-layer memory
 
-Only what you actually confirmed is stored. Raw conversation never is, and the summary never becomes a file.
+The automatic flow stores confirmed requirement summaries and preferences, not raw conversations. Users can also manage preferences directly on the settings page. No separate requirements document is generated.
 
-| Layer | Location | Contents |
+| Layer | Actual default location | Contents |
 |---|---|---|
-| Global | `<profile>/grill-first/global.json` (falls back to `~/.dsh-grill-first/global.json`) | Standing preferences, e.g. "comments in English" |
-| Project | `<workspace>/.dsh/grill-first/memory.json` | Project background and task history (task name, summary, date; last 100 entries) |
+| Global | `~/.dsh/grill-first/global.json` | Global preferences |
+| Project | `<workspace>/.dsh/grill-first/memory.json` | Project preferences, background and the latest 100 history entries |
 
-Set `memoryScope: global` to keep project context in the global directory instead. Handy when you don't want a `.dsh/` folder in every repo. Next interview, `grill_start` returns this as `memory_context`, so the same question is never asked twice.
+`DSH_GRILL_HOME` overrides the global directory, yielding `<DSH_GRILL_HOME>/global.json`. With `memoryScope: global`, project memory moves to `project.json` in that same global directory and is shared across projects; the global preference filename remains unchanged. These paths are not profile-relative, and an unwritable directory does not trigger a fallback to another location.
 
-## Development
+Memory uses unencrypted local JSON. Enabled preferences and project background are returned as `memory_context` during subsequent clarification. Writes are serialized within the process and use atomic temporary-file replacement; there is no cross-process lock.
+
+## Research modes
+
+Research runs only when `grill_research` is called; `always` does not start background research. `off` makes no network requests. `auto` requires `applicable: true`; `always` skips that applicability check. Disabling the plugin also disables research.
+
+Only explicit public keywords are sent to the GitHub REST API; the tool does not read or upload workspace contents. It compares up to three candidates, checking repository metadata, README, license and releases, and returns source URLs, check times and failure states. `quick` returns up to 3000 characters of README and one release; `deep` returns up to 12000 characters and three releases with a larger bounded request budget.
+
+External text is evidence, never instructions. A license of `unknown` means it was not verified; license compatibility is not assessed for any candidate. Timeouts, rate limits and network failures produce degraded results so a local solution can still proceed. Candidate code is never automatically installed or executed.
+
+## Development and verification
 
 ```bash
-npm install                 # dev dependencies (schemastery comes from the host at runtime)
-npm run build               # TypeScript → dist/
-npm test                    # build + 127 unit / end-to-end tests
-node scripts/selfcheck.mjs  # static check: Chinese JSDoc, `any` usage, spec-to-code map
+npm install
+npm run build
+npx vitest run test/tools.test.ts test/e2e.test.ts
+npm test
 ```
 
-`dist/` is committed on purpose so `dsh plugin add github:…` works without compiling on your machine. CI runs `typecheck` + tests on Node 22.
+Tests import `dist/`, so build after changing sources. The two selected suites check tool behavior and plugin integration in a simulated host; they do not establish installed UI behavior. Historical test counts are not a current coverage claim.
 
-## Compatibility
-
-- Peer dependency: only `@deepseek-ai/schemastery` (`^3.18.1`, shipped by the host).
-- No import of any `@deepseek-ai/dsh*` runtime package, so no `engines.dsh` and no DSH peer range to keep in sync. Verified against DSH `0.2.1-rc.2`.
-
-## Known limitations
-
-- The gate only applies to the **root agent** that talks to you. Delegated work isn't gated (but delegation tools themselves are, so a subagent can't be used to sidestep it).
-- `ask` mode asks **once per task**: otherwise a task that writes 20 files would show 20 cards. Use `strict` if you want every action blocked.
-- The judge is **keyword heuristics**, not a semantic model: questions are detected by punctuation and interrogatives. Rare ambiguous sentences can be misjudged; say `直接做` or let the model call `grill_start` again to correct it.
-- The judge runs in Chinese and English only. English keywords match on word boundaries (`skip` matches `skip` and `(skip)` but not `skipList`).
-- Memory is plain local JSON, unencrypted.
+Node.js 20 or later is required. The host supplies `@deepseek-ai/schemastery`. V1 also uses host connection, settings and workspace services and the client settings slot; compatibility needs verification on the target host.
 
 ## License
 

@@ -1,214 +1,132 @@
 # dsh-grill-first
 
-![tests](https://img.shields.io/badge/tests-127%20passing-brightgreen)
-![license](https://img.shields.io/badge/license-MIT-blue)
-![DSH plugin](https://img.shields.io/badge/DSH-plugin-blueviolet)
+> DSH（DeepSeek Harness）插件：先把模糊任务聊清楚，再确认需求并开工。
 
-> DSH（DeepSeek Harness）插件：接到任务先问清楚，把模糊需求聊成明确需求，你点头之后主任务才开工。
+[English](./README.en.md) · [配置项](#配置项) · [两层记忆](#两层记忆)
 
-**AI 助手最常犯的错，是替你补全没说清的部分，然后很自信地做完。**
+本文描述 V1（1.0.0）工作树实现；不代表该版本已发布、已安装或已完成宿主 UI 验证。
 
-[English](./README.en.md) · [安装](#安装) · [配置项](#配置项) · [已知限制](#已知限制)
+## 使用流程
 
-## 一次典型的对话
+1. 模型把任务原文交给 `grill_start`，判断目标、范围、约束和验收标准是否足够明确。
+2. 对模糊任务只追问影响方案的歧义。默认每轮最多 3 问、最多 3 轮，不必凑满；每轮用 `mode: continue` 记录答案摘要和实际问过的维度。
+3. 信息齐全或达到轮次上限后，停止追问，把需求与尚未验证的假设整理成四段清单，交给 `grill_confirm`。**达到上限仍需确认，不会自动放行。**
+4. 用户选择「确认，按此开工」后放行本次任务；选择「要改」则修订清单并再次确认。
+5. 明确的小任务、命中跳过词的新任务可直接放行。正在澄清时的咨询或追问不会替代需求确认。
 
-```text
-你  把那个页面优化一下
-
-它  1) 是哪个页面？2) 「优化」指速度、样式还是文案？
-    3) 怎么才算优化好了？
-
-你  登录页，主要是样式，现在对齐和间距看着乱
-
-它  【目标】整理登录页视觉
-    【范围】只改样式，不动结构和文案
-    【约束】沿用现有设计规范
-    【验收标准】主要页面在移动端不错位
-                     [ 确认，按此开工 ]  [ 要改 ]
-
-你  确认
-
-它  （这时才动手）
-```
-
-不装这个插件时，同一句话大概率是这样：
+例如「把那个页面优化一下」需要先确定页面、优化范围和完成标准。确认清单可以是：
 
 ```text
-你  把那个页面优化一下
-它  好的，已经帮你调整了首页的文案和配色 ✨   ← 你要的是登录页
+目标：整理登录页视觉
+范围：只改样式，不动结构和文案
+约束：沿用现有设计规范
+验收标准：主要页面在移动端不错位
+[确认，按此开工] [要改]
 ```
 
-## 四种档位的区别
-
-| | 不装插件 | `gateMode: warn`（默认） | `gateMode: ask` | `gateMode: strict` |
-|---|---|---|---|---|
-| 任务模糊时 | 直接猜着做 | 追问；动手不拦 | 追问；动手前弹一次确认卡片 | 追问；没确认前拦截写文件、执行命令 |
-
-`warn` 是默认值：升级插件不会突然卡住你已有的工作流。
-
-## 它解决什么问题
-
-这个插件在每次新任务开工前插一道需求澄清，省掉「做完了才发现不对」的返工：
-
-1. 模型先把你的任务原文交给 `grill_start` 判定；
-2. 任务模糊（缺目标 / 范围 / 约束 / 验收标准）→ 它按轮追问你，每轮 3 个问题，最多 3 轮，每轮都基于你上一轮的回答继续深挖；
-3. 问清后整理成中文四段清单（目标 / 范围 / 约束 / 验收标准），用 `grill_confirm` 请你确认；
-4. 你点"确认，按此开工"→ 本次任务放行；你点"要改"→ 它按你的反馈修订后再来一次；
-5. 一句话就能说清的小任务、以及带「直接做 / 跳过提问 / 不用问 / skip」字样的消息，**不会被打扰**。
-
-严格档位（`gateMode: "strict"`）下，需求没确认前模型不能写文件、跑命令。「没问清就不许动手」靠的是门禁，不靠模型自觉。
-
-`ask` 档位（0.1.4 新增）介于两者之间：需求没确认时，变更类操作会弹一张 DSH 原生确认卡片问你"照现在的理解直接动手吗"，你点「是」就放行，点「否」你再补一句需求。不用改配置文件。
-
-## 安装
-
-装插件前请先退出正在跑的任务。三种方式任选：
-
-**方式一：DSH 插件市场**（推荐）
-
-在 DSH 设置 → 插件里搜索 `dsh-grill-first` 一键安装。
-
-**方式二：npm 命令行**
-
-```bash
-dsh plugin --profile <你的 profile 名> add dsh-grill-first
-```
-
-**方式三：本地包 / GitHub 仓库**
-
-```bash
-dsh plugin --profile <你的 profile 名> add /绝对路径/dsh-grill-first-0.1.6.tgz
-dsh plugin --profile <你的 profile 名> add github:InoriMutsumi/dsh-grill-first
-```
-
-装完**即生效**：本机实测 DSH 的 live profile 会热加载新插件，不需要重启（若你的 profile 是启动式、或列表里没出现，再完全退出 DSH 重开一次）。
-
-## 使用
-
-装好之后不需要你做什么：它靠两件事自动工作。
-
-- **协议提示段**：插件往系统提示里注入一小段中文协议（约 600 字），告诉模型"接到新任务先调 `grill_start`"。你在系统提示里能看到 `【开工前提问协议（grill-first）】` 就说明装好了。
-- **工具**：模型会用这两个工具推进澄清流程。
+## 三个工具
 
 | 工具 | 作用 |
 |---|---|
-| `grill_start` | 判定任务是否需要澄清；返回 `verdict`、`focus_hints`（该问什么）、`memory_context`（已知偏好，避免重复问） |
-| `grill_confirm` | 把四段式需求清单交给你确认；确认后放行任务，并把确认过的内容写进记忆 |
+| `grill_start` | 判断是否需要澄清，返回追问方向、轮次、历史答案和 `memory_context` |
+| `grill_confirm` | 展示需求清单；明确确认后放行，并按记忆设置保存历史和偏好 |
+| `grill_research` | 需求明确后，用公开技术关键词查询开源候选和来源证据；不安装、不执行候选代码 |
 
-### 想跳过提问时
+`grill_confirm` 优先使用宿主结构化提问。通道不可用或抛错时返回 `needs_user_confirmation: true`，模型应改用内置提问工具展示完整清单，得到用户明确同意后再传 `confirmed: true`。只有**同一会话、相同清单此前实际进入兜底通道**才接受该声明；正常服务可用时直接传 `true` 不会跳过确认卡片。正文超过 6000 字会被拒绝，需要先整理保留全部约束的摘要再确认。
 
-- 消息里带上「**直接做**」「**跳过提问**」「**不用问**」「**skip**」中任意一个 → 立刻开工；
-- 只是**问情况**（"这个插件怎么样""查一下我的仓库里有什么""解释一下这段代码"）→ 不算新任务，不追问；
-- 或者在设置里把 `enabled` 关掉 / 把 `gateMode` 调成 `off` → 整个插件静默。
+## 门禁模式
+
+| `gateMode` | 需求未确认时 |
+|---|---|
+| `off` | 不拦截工具；不等于关闭整个插件 |
+| `warn`（默认） | 记录日志，允许工具执行 |
+| `ask` | 每次变更类调用都请求宿主审批；审批该次操作不会放行整项任务 |
+| `strict` | 拒绝变更类调用，直到需求确认或明确跳过 |
+
+门禁仅作用于根 agent。只读工具允许通过；写文件、命令和委派类工具属于受控操作。`ask` 返回审批请求不代表用户已批准；后续变更仍需审批，直到 `grill_confirm` 等合法流程打开任务门禁。
+
+关闭 `enabled` 可停用澄清、门禁与调研。默认跳过词包括「直接做」「跳过提问」「不用问」「skip」；英文按词边界匹配，中文按子串匹配；紧邻关键词的否定表达（如「不要直接做」「don't skip」）不算跳过指令。判定器是中英文关键词启发式，并非完整的语义理解，复杂否定或引用仍可能误判。
+
+## 安装
+
+可通过 DSH 插件管理安装选定版本，或使用命令行：
+
+```bash
+dsh plugin --profile <你的-profile> add dsh-grill-first
+# 开发构建：使用实际生成的本地包路径
+dsh plugin --profile <你的-profile> add /绝对路径/dsh-grill-first-1.0.0.tgz
+```
+
+以上为安装方式示例，registry 的默认版本不保证是本文的 V1。以安装结果中的应用状态为准；仓库源码修改不等于运行中的安装副本已更新。
 
 ## 配置项
 
-DSH 设置界面 → 插件 → dsh-grill-first，共 8 项：
+V1 提供独立的 **DSH 设置 → 需求澄清** 页面，共 10 项配置，保存到当前插件实例。页面依赖宿主的设置、连接和工作区服务；实际部署后仍需检查页面是否加载与保存成功。
 
 | 配置 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `enabled` | 布尔 | `true` | 总开关。关闭后既不追问也不拦截工具 |
-| `gateMode` | `off` / `warn` / `ask` / `strict` | `warn` | `off` 不拦截；`warn` 只在日志里记录"需求未确认"；`ask` 未确认时弹卡片问你；`strict` 未确认前直接拦截变更类工具 |
-| `maxQuestionsPerRound` | 1-6 | `3` | 每轮最多问几个问题 |
-| `maxRounds` | 1-10 | `3` | 最多追问几轮；问满后 `grill_start` 直接放行 |
-| `intensity` | `gentle` / `standard` / `grill` | `standard` | 追问力度：`gentle` 两维齐就放行 / `standard` 三维 / `grill` 还要求写清验收标准 |
-| `bypassKeywords` | 字符串数组 | `["直接做","跳过提问","不用问","skip"]` | 命中即跳过提问 |
-| `memoryEnabled` | 布尔 | `true` | 是否启用两层记忆 |
-| `memoryScope` | `project` / `global` | `project` | 项目背景/历史存哪：`project` 存工作区，`global` 存全局目录（跨项目共享） |
+| `enabled` | 布尔 | `true` | 总开关 |
+| `gateMode` | `off` / `warn` / `ask` / `strict` | `warn` | 门禁模式，见上表 |
+| `maxQuestionsPerRound` | 1–6 | `3` | 每轮问题数上限 |
+| `maxRounds` | 1–10 | `3` | 追问轮数上限；达到上限仍需确认清单 |
+| `intensity` | `gentle` / `standard` / `grill` | `standard` | 两维 / 三维 / 还要求验收标准的明确度判定 |
+| `bypassKeywords` | 字符串数组 | `["直接做","跳过提问","不用问","skip"]` | 命中时跳过澄清 |
+| `memoryEnabled` | 布尔 | `true` | 控制澄清流程读取与确认流程写入记忆 |
+| `memoryScope` | `project` / `global` | `project` | 项目记忆存工作区或全局目录 |
+| `researchMode` | `off` / `auto` / `always` | `auto` | 调研关闭 / 适用时查询 / 每次调用均尝试查询 |
+| `researchDepth` | `quick` / `deep` | `quick` | 调研请求预算与摘录深度 |
 
-
-### 怎么改配置
-
-DSH 设置页里的插件条目目前只提供「启用 / 停用」开关（客户端的插件页不渲染第三方插件的配置表单），要改上面 8 项请编辑 **profile 的补丁层** `cordis.patch.yml`：
+页面可编辑全部配置，跳过词每行一个。也可在 profile 的 `cordis.patch.yml` 中按插件条目配置；只提供需要覆盖的项：
 
 ```yaml
-# <profile 目录>/cordis.patch.yml
 - id: dsh-grill-first
   name: dsh-grill-first
   config:
-    gateMode: strict          # off | warn | ask | strict
-    maxQuestionsPerRound: 3   # 1-6
-    maxRounds: 3              # 1-10
-    intensity: standard       # gentle | standard | grill
-    memoryEnabled: true
-    memoryScope: project      # project | global
-    bypassKeywords: [直接做, 跳过提问, 不用问, skip]
+    gateMode: strict
+    maxRounds: 3
+    researchMode: auto
+    researchDepth: quick
 ```
 
-改完重启 DSH 生效。只写想改的项也可以，其余项用默认值。
+### 偏好管理
+
+同一设置页支持全局 / 项目偏好的查看、新增、编辑、启停和删除，可编辑文本与标签并查看来源。项目范围须选择宿主中已登记的有效工作区。停用偏好不再进入后续摘要；删除前页面会确认。
+
+保存使用 revision 检查并发变更，冲突时重新载入后再编辑；损坏的记忆文件不会被静默覆盖。管理通道仅接受宿主所有者的浏览器，不是模型可调用的偏好写入工具。`memoryEnabled: false` 停止自动读写，设置页仍可管理已有偏好。
 
 ## 两层记忆
 
-只记录**你确认过**的内容，不记录对话原文，也不会把需求清单写成文件。
+自动流程仅保存用户确认的需求摘要和偏好，不保存原始聊天记录；设置页也可由用户直接管理偏好。不会另外生成需求文档。
 
-| 层 | 位置 | 内容 |
+| 层 | 实际默认位置 | 内容 |
 |---|---|---|
-| 全局层 | `<profile 目录>/grill-first/global.json`（不可写时退化到 `~/.dsh-grill-first/global.json`） | 通用偏好，如"注释一律用中文" |
-| 项目层 | `<工作区>/.dsh/grill-first/memory.json` | 项目背景、任务历史（任务名 + 需求摘要 + 日期） |
+| 全局 | `~/.dsh/grill-first/global.json` | 全局偏好 |
+| 项目 | `<工作区>/.dsh/grill-first/memory.json` | 项目偏好、背景和最近 100 条任务历史 |
 
-项目层默认落在工作区；把 `memoryScope` 改成 `global` 后改落 `<全局目录>/project.json`，适合"所有项目通用"的背景约定，不想往每个仓库里塞 `.dsh/` 时也用这个。历史记录只保留最近 100 条（0.1.4 起）。
+设置 `DSH_GRILL_HOME` 可替换全局目录，文件为 `<DSH_GRILL_HOME>/global.json`。`memoryScope: global` 将项目记忆改存同一全局目录的 `project.json`，在项目之间共享；不会改动全局偏好的文件名。路径并非 profile 目录，也没有「不可写则自动换目录」的逻辑。
 
-下次追问时，`grill_start` 会把这些内容作为 `memory_context` 返回，模型就不会重复问你同一件事。
+记忆是未加密的本地 JSON；下次澄清时启用的偏好及项目背景作为 `memory_context` 返回。写入采用同进程串行与临时文件原子替换，不提供跨进程锁。
 
-## 开发
+## 调研模式
 
-```bash
-npm install          # 装开发依赖（schemastery 由宿主提供，仅开发期需要）
-npm run build        # TypeScript → dist/
-npm test             # 构建 + 127 个单测 / 端到端场景测试
-node scripts/selfcheck.mjs   # 静态自检：中文 JSDoc、any 用量、需求→代码位置
-```
+`grill_research` 被调用时才执行查询，`always` 不会自行启动后台调研。`off` 不联网；`auto` 要求参数 `applicable: true`；`always` 跳过适用性判断。总开关关闭时调研也关闭。
 
-推送到 GitHub 后 `.github/workflows/ci.yml` 会自动跑上面那两条（`npm ci` + `npm test`）。`dist/` 是**故意提交**的：这样 `dsh plugin add github:…` 装完即可用，不需要在你的机器上编译。
+工具只向 GitHub REST API 发送显式的公开关键词，不读取或上传工作区。一次最多比较 3 个候选，核对仓库元数据、README、许可证与发布信息，并返回来源地址、核对时间和失败状态。`quick` 摘录最多 3000 字、最近 1 个发布；`deep` 摘录最多 12000 字、最近 3 个发布，并提高有界请求预算。
 
-代码结构：
+外部文本仅作资料，不能当作指令。许可证 `unknown` 表示未核实，所有候选的许可证兼容性均未评估。超时、限流或网络失败会返回降级结果，可继续本地方案；不会自动安装或执行候选代码。
 
-```
-src/
-  index.ts              插件装配入口（工具 + 协议段 + 门禁）
-  config.ts             配置归一化（不依赖宿主，可单测）
-  configSchema.ts       Schemastery 配置声明（设置界面用，8 项）
-  version.ts            从 package.json 读版本号，供 grill_start 返回
-  judge/heuristics.ts   任务模糊度判定（纯函数）
-  prompt/protocol.ts    注入系统提示的中文协议文本
-  tools/grillStart.ts   grill_start 工具
-  tools/grillConfirm.ts grill_confirm 工具
-  gate/preExecute.ts    变更类工具门禁（tools/pre-execute + 新消息重置）
-  memory/store.ts       两层记忆的读写
-```
-
-## 兼容性与适配
-
-本插件对外只有两处依赖，都不归 DSH 的"插件版本门禁"管：
-
-- **peer 依赖**：只有 `@deepseek-ai/schemastery`（`^3.18.1`，宿主自带；DSH 0.2.1-rc.2 里解析到的实际版本是 3.18.5）。
-- **宿主扩展点**：cordis 上下文 API：`ctx.tools`（注册工具）、`ctx.get('userQuestions')`（结构化提问通道）、`ctx.inject(['systemPrompt'])`、事件 `tools/pre-execute` 与 `agent/inbox/inserted`。
-
-它**不 import 任何 `@deepseek-ai/dsh*` 运行时包**，所以既没有 `engines.dsh`，也没有 `@deepseek-ai/dsh` peer。DSH 的 `plugin-compatibility` 检查（`dsh-app-boot` 里的 `evaluatePluginCompatibility`）只在插件声明了 `engines.dsh` 或 `@deepseek-ai/dsh*` peer 时才介入，判不过才会被拦；本插件两条都不沾，因此升 DSH 一般不需要改代码。
-
-> 以后若要 import harness 内部包，请显式声明 peer 范围并带上预发布分支，例如
-> `">=0.2.0-rc.2 <0.3.0-0 || >=0.2.1-rc.1 <0.3.0-0"`。
-> DSH 自己的门禁用 `semver.satisfies(..., { includePrerelease: true })` 判定，`^0.2.0-rc.2` 能匹配 `0.2.1-rc.2`；
-> 但标准 npm 语义（不加 `includePrerelease`）会判不匹配，所以上游要求写显式分支。
-
-已验证的宿主版本：`0.2.0-rc.2`（0.1.x 开发期）、`0.2.1-rc.2`（2026-10-17 复核：`typecheck`、94 个单测、`verify-installed` 一致，且实测加载运行；0.1.4 起 127 个单测）。升完 DSH 后的自检三步：
+## 开发与验证
 
 ```bash
-node scripts/verify-installed.mjs   # 安装拷贝与仓库产物是否一致
-# 调一次 grill_start：返回里的 version 就是当前正在跑的插件版本
-# 再执行一个需要确认的任务：确认门禁仍然会拦（而不是悄悄放行）
+npm install
+npm run build
+npx vitest run test/tools.test.ts test/e2e.test.ts
+npm test
 ```
 
-## 已知限制
+测试从 `dist/` 导入，因此修改源码后须先构建。限定两组测试验证工具行为与假宿主中的插件链路，不等同于安装后真实 UI 验证。不要用旧版本的测试总数表示当前覆盖率。
 
-- 门禁只对**根 agent**（能直接跟你对话的那个）生效；子 agent / 团队成员不拦，否则正常的委派工作流会被卡死。因此**委派类工具本身**（`subagent`、`workflow`、`spawn_teammate`…）在未确认前也会被拦，防止"派个子代理替自己动手"绕过门禁。
-- `ask` 档位**只问一次**：卡片弹过之后门禁即视为放行（否则一次任务里写 20 个文件就要弹 20 张卡片）。想每次都拦，请用 `strict`。
-- 判定器是**关键词启发式**，不是语义模型：问句靠问号/疑问词/"查一下/看看"这类信号识别，极少数既像提问又像下令的句子可能判错；判错时直接说「直接做」或让模型调一次 `grill_start` 即可纠正。英文关键词按词边界匹配，中文按子串匹配。
-- `warn` 档位只能"记录不拦截"：DSH 的 `tools/pre-execute` 事件没有"放行但同时给模型提示"这种返回形态。
-- 记忆是本地文件，不含加密；删掉对应 json 即清空。
-- `grill_confirm` 优先走 DSH 的结构化提问通道；该通道不可用时（例如子 agent 内部）会返回 `needs_user_confirmation: true`，由模型改用内置提问工具兜底。
-- **改代码后必须重启 DSH**：DSH 加载的是 profile 里那份安装拷贝，而且插件**代码**改动不会热生效（实测：`cordis.patch.yml` 里的**配置**改动是热生效的，包代码不是）。判断运行中的是哪一版：调一次 `grill_start`，返回里的 `version` 字段就是当前在跑的版本；看不到 `version` 说明跑的是 0.1.0 之前的旧代码。
-- 跳过关键词里**英文按词边界匹配**（`skip` 能命中 `skip`、`Skip this`、`（skip）`，但不会命中 `skipList`、`skip_list`、`bypass-keyword` 这类标识符）；中文关键词按子串匹配（`直接做` 命中 `那你直接做好了`）。
+运行环境要求 Node.js 20 或以上，宿主提供 `@deepseek-ai/schemastery`。V1 还使用宿主连接、设置及工作区服务与客户端设置插槽，兼容性需在目标宿主验证。
 
 ## 许可
 

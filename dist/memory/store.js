@@ -1,235 +1,294 @@
-/**
- * 两层记忆存储（R5）：
- * - 全局层：跨项目的通用偏好，默认 `<home>/.dsh/grill-first/global.json`；
- * - 项目层：当前工作区的项目背景与历史需求，默认 `<workspace>/.dsh/grill-first/memory.json`。
- *
- * 写入一律"写临时文件 → rename"（原子写）；读取容错，坏 JSON 视为空结构而不抛错。
+/** 两层记忆存储。memoryEnabled 由调用者管控，本模块不读取插件配置。
+ * 所有写入按文件在同进程串行执行；唯一临时文件 + rename 原子替换。
+ * 不提供跨进程锁；revision 用于管理界面的乐观冲突检测。
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile, unlink } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
-/** 项目层历史条目的保留上限（0.1.4 修：以前只增不减，文件会越长越大）。 */
+export class PreferenceConflictError extends Error {
+    code = 'REVISION_CONFLICT';
+    constructor() { super('偏好已被其他操作修改，请重新读取后重试'); this.name = 'PreferenceConflictError'; }
+}
+export class MemoryReadError extends Error {
+    file;
+    code = 'MEMORY_READ_ERROR';
+    constructor(file, options) {
+        super(`无法安全读取记忆文件，已拒绝覆盖：${file}`, options);
+        this.file = file;
+        this.name = 'MemoryReadError';
+    }
+}
 export const MAX_HISTORY = 100;
-/** 摘要长度上限（字符数），供注入提示用。 */
 export const SUMMARY_LIMIT = 500;
-/** 摘要里各段的条数上限。 */
-const SUMMARY_MAX_PREFERENCES = 5;
-const SUMMARY_MAX_CONTEXT = 5;
-const SUMMARY_MAX_HISTORY = 3;
-/** 空全局层。 */
-export function emptyGlobal() {
-    return { preferences: [] };
-}
-/** 空项目层。 */
-export function emptyProject() {
-    return { project_context: [], history: [] };
-}
-/** 空快照。 */
-export function emptySnapshot() {
-    return { global: emptyGlobal(), project: emptyProject() };
-}
-/** 解析工作区根目录（未传时用进程 cwd）。 */
+/** 按 JavaScript UTF-16 长度计，去首尾空白后校验。迁移不截断旧数据。 */
+export const MAX_PREFERENCE_LENGTH = 2000;
+export function emptyGlobal() { return { preferences: [] }; }
+export function emptyProject() { return { project_context: [], history: [], preferences: [] }; }
+export function emptySnapshot() { return { global: emptyGlobal(), project: emptyProject() }; }
 export function resolveWorkspace(workspaceRoot) {
-    const raw = workspaceRoot && workspaceRoot.trim() !== '' ? workspaceRoot : process.cwd();
-    return path.resolve(raw);
+    return path.resolve(workspaceRoot?.trim() ? workspaceRoot : process.cwd());
 }
-/**
- * 全局记忆文件路径。
- *
- * 优先 `DSH_GRILL_HOME` 环境变量（测试与自定义部署用）；否则 `<home>/.dsh/grill-first/global.json`。
- * 阶段 1 实测：DSH 没有把 profile 目录通过环境变量暴露给插件，因此无法可靠定位 profile 配置目录，
- * 固定到 `~/.dsh/grill-first/`（跨 profile 共享用户偏好，语义上也更合理）。
- */
 export function globalMemoryPath() {
     const override = process.env.DSH_GRILL_HOME;
-    const base = override && override.trim() !== '' ? path.resolve(override) : path.join(homedir(), '.dsh', 'grill-first');
-    return path.join(base, 'global.json');
+    return path.join(override?.trim() ? path.resolve(override) : path.join(homedir(), '.dsh', 'grill-first'), 'global.json');
 }
-/**
- * 项目记忆文件路径。
- * @param workspaceRoot 工作区根目录。
- * @param scope project（默认）= `<workspace>/.dsh/grill-first/memory.json`；
- *   global = 与 global.json 同目录的 `project.json`（不想往项目里写文件时用）。
- */
 export function projectMemoryPath(workspaceRoot, scope = 'project') {
     if (scope === 'global')
         return path.join(path.dirname(globalMemoryPath()), 'project.json');
     return path.join(resolveWorkspace(workspaceRoot), '.dsh', 'grill-first', 'memory.json');
 }
-/** 归一化用于去重比较的文本（去空白、统一小写、去尾部标点）。 */
 function normalizeKey(text) {
     return text.replace(/\s+/g, '').replace(/[。；;，,！!？?]+$/g, '').toLowerCase();
 }
-/** 读取 JSON；文件不存在或解析失败都返回 fallback（容错，不抛错）。 */
-async function readJson(file, fallback) {
+function hash(value) { return createHash('sha256').update(value).digest('hex'); }
+function isRecord(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+async function readDocument(file) {
+    let raw;
     try {
-        const raw = await readFile(file, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
-            return fallback;
-        return parsed;
+        raw = await readFile(file, 'utf8');
     }
-    catch {
-        return fallback;
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return { data: {}, revision: 'missing' };
+        throw new MemoryReadError(file, { cause: error });
+    }
+    try {
+        // 只恢复旧版本已知的尾部 literal \\n 缺陷，不猜测修复其他坏 JSON。
+        let data;
+        try {
+            data = JSON.parse(raw);
+        }
+        catch {
+            data = JSON.parse(raw.replace(/(?:\\n)+\s*$/, ''));
+        }
+        if (!isRecord(data))
+            throw new Error('记忆根节点必须是对象');
+        for (const key of ['preferences', 'project_context', 'history']) {
+            if (data[key] !== undefined && !Array.isArray(data[key]))
+                throw new Error(`${key} 必须是数组`);
+        }
+        return { data, revision: hash(raw) };
+    }
+    catch (error) {
+        throw new MemoryReadError(file, { cause: error });
     }
 }
-/** 原子写入 JSON（先写 .tmp 再 rename）。 */
+const pending = new Map();
+async function locked(file, operation) {
+    const key = process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
+    const previous = pending.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    pending.set(key, current);
+    try {
+        return await current;
+    }
+    finally {
+        if (pending.get(key) === current)
+            pending.delete(key);
+    }
+}
 async function writeJsonAtomic(file, value) {
     await mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    await rename(tmp, file);
-}
-/** 把任意来源的全局层数据补成合法结构。 */
-function coerceGlobal(value) {
-    const list = Array.isArray(value?.preferences) ? value.preferences : [];
-    const preferences = [];
-    for (const item of list) {
-        if (!item || typeof item.text !== 'string' || item.text.trim() === '')
-            continue;
-        preferences.push({
-            text: item.text.trim(),
-            tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === 'string') : [],
-            updated: typeof item.updated === 'number' && Number.isFinite(item.updated) ? item.updated : 0,
-        });
+    const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    const raw = `${JSON.stringify(value, null, 2)}\n`;
+    try {
+        await writeFile(tmp, raw, { encoding: 'utf8', flag: 'wx' });
+        await rename(tmp, file);
     }
-    return { preferences };
-}
-/** 把任意来源的项目层数据补成合法结构。 */
-function coerceProject(value) {
-    const context = Array.isArray(value?.project_context)
-        ? value.project_context.filter((t) => typeof t === 'string' && t.trim() !== '')
-        : [];
-    const history = [];
-    const rawHistory = Array.isArray(value?.history) ? value.history : [];
-    for (const item of rawHistory) {
-        if (!item || typeof item !== 'object')
-            continue;
-        const task = typeof item.task === 'string' ? item.task : '';
-        const requirements = typeof item.requirements === 'string' ? item.requirements : '';
-        const date = typeof item.date === 'string' ? item.date : '';
-        if (task.trim() === '' && requirements.trim() === '')
-            continue;
-        history.push({ task, requirements, date });
+    finally {
+        await unlink(tmp).catch((error) => { if (error.code !== 'ENOENT')
+            throw error; });
     }
-    return { project_context: context, history };
+    return hash(raw);
 }
-/**
- * 读取两层记忆。
- * @param workspaceRoot 工作区根目录；省略时用 `process.cwd()`。
- */
+function preferences(data, scope) {
+    const list = Array.isArray(data.preferences) ? data.preferences : [];
+    const used = new Set();
+    return list.flatMap((item, index) => {
+        const value = typeof item === 'string' ? { text: item } : item;
+        if (!isRecord(value) || typeof value.text !== 'string' || !value.text.trim())
+            return [];
+        let id = typeof value.id === 'string' && value.id.trim() ? value.id : `legacy-${hash(`${scope}:${index}:${value.text}`).slice(0, 24)}`;
+        if (used.has(id))
+            id = `legacy-${hash(`${scope}:${index}:${id}:${value.text}`).slice(0, 24)}`;
+        used.add(id);
+        return [{
+                ...value,
+                id,
+                text: value.text.trim(),
+                tags: cleanTags(value.tags),
+                source: typeof value.source === 'string' && value.source.trim() ? value.source : 'legacy',
+                enabled: value.enabled !== false,
+                updated: typeof value.updated === 'number' && Number.isFinite(value.updated) ? value.updated : 0,
+            }];
+    });
+}
+function cleanTags(tags) {
+    return Array.isArray(tags) ? [...new Set(tags.filter((tag) => typeof tag === 'string' && !!tag.trim()).map(tag => tag.trim()))] : [];
+}
+function project(data) {
+    return {
+        project_context: Array.isArray(data.project_context) ? data.project_context.filter((v) => typeof v === 'string' && !!v.trim()) : [],
+        history: Array.isArray(data.history) ? data.history.flatMap((v) => {
+            if (!isRecord(v))
+                return [];
+            const task = typeof v.task === 'string' ? v.task : '';
+            const requirements = typeof v.requirements === 'string' ? v.requirements : '';
+            return task.trim() || requirements.trim() ? [{ task, requirements, date: typeof v.date === 'string' ? v.date : '' }] : [];
+        }) : [],
+        preferences: preferences(data, 'project'),
+    };
+}
+/** 兼容旧读取的容错；管理读取和所有写入则传播错误，避免把坏文件覆盖为空。 */
 export async function loadMemory(workspaceRoot, scope = 'project') {
-    const global = coerceGlobal(await readJson(globalMemoryPath(), emptyGlobal()));
-    const project = coerceProject(await readJson(projectMemoryPath(workspaceRoot, scope), emptyProject()));
-    return { global, project };
+    const safeRead = async (file) => { try {
+        return (await readDocument(file)).data;
+    }
+    catch {
+        return {};
+    } };
+    const [global, local] = await Promise.all([safeRead(globalMemoryPath()), safeRead(projectMemoryPath(workspaceRoot, scope))]);
+    return { global: { preferences: preferences(global, 'global') }, project: project(local) };
 }
-/**
- * 追加一条全局偏好（按文本去重，重复则刷新 updated 时间）。
- * @param text 偏好原文，例如"注释一律用中文"。
- * @param tags 分类标签，例如 `["语言"]`。
- * @param workspaceRoot 工作区根目录（仅用于定位项目层，写入的是全局层）。
- */
-export async function savePreference(text, tags, workspaceRoot) {
-    const trimmed = text.trim();
-    if (trimmed === '')
-        return;
-    const file = globalMemoryPath();
-    const memory = coerceGlobal(await readJson(file, emptyGlobal()));
-    const key = normalizeKey(trimmed);
-    const existing = memory.preferences.find((p) => normalizeKey(p.text) === key);
-    const now = Date.now();
-    if (existing) {
-        existing.text = trimmed;
-        existing.updated = now;
-        if (Array.isArray(tags) && tags.length > 0) {
-            const merged = new Set([...existing.tags, ...tags.filter((t) => typeof t === 'string' && t.trim() !== '')]);
-            existing.tags = [...merged];
+function preferenceFile(workspaceRoot, scope, projectScope) {
+    if (scope !== 'global' && scope !== 'project')
+        throw new TypeError('scope 必须是 global 或 project');
+    if (projectScope !== 'global' && projectScope !== 'project')
+        throw new TypeError('projectScope 必须是 global 或 project');
+    return scope === 'global' ? globalMemoryPath() : projectMemoryPath(workspaceRoot, projectScope);
+}
+export async function listPreferences(workspaceRoot, scope, projectScope = 'project') {
+    const file = preferenceFile(workspaceRoot, scope, projectScope);
+    return locked(file, async () => {
+        const doc = await readDocument(file);
+        return { scope, revision: doc.revision, preferences: preferences(doc.data, scope) };
+    });
+}
+function validateText(text) {
+    if (typeof text !== 'string' || !text.trim() || text.trim().length > MAX_PREFERENCE_LENGTH) {
+        throw new RangeError(`偏好内容长度必须为 1–${MAX_PREFERENCE_LENGTH} 字符`);
+    }
+    return text.trim();
+}
+export async function mutatePreference(workspaceRoot, scope, mutation, projectScope = 'project') {
+    const file = preferenceFile(workspaceRoot, scope, projectScope);
+    return locked(file, async () => {
+        const doc = await readDocument(file);
+        if (!mutation || typeof mutation.revision !== 'string' || mutation.revision !== doc.revision)
+            throw new PreferenceConflictError();
+        const list = preferences(doc.data, scope);
+        const now = Date.now();
+        if (mutation.action === 'add') {
+            if (mutation.enabled !== undefined && typeof mutation.enabled !== 'boolean')
+                throw new TypeError('enabled 必须为布尔值');
+            list.push({ id: randomUUID(), text: validateText(mutation.text), tags: cleanTags(mutation.tags), source: mutation.source?.trim() || 'manual', enabled: mutation.enabled ?? true, updated: now });
         }
-    }
-    else {
-        memory.preferences.push({
-            text: trimmed,
-            tags: Array.isArray(tags) ? tags.filter((t) => typeof t === 'string' && t.trim() !== '') : [],
-            updated: now,
-        });
-    }
-    void workspaceRoot;
-    await writeJsonAtomic(file, memory);
+        else {
+            const index = list.findIndex(item => item.id === mutation.id);
+            const item = list[index];
+            if (!item)
+                throw new RangeError('偏好不存在，请重新读取列表');
+            switch (mutation.action) {
+                case 'update':
+                    item.text = validateText(mutation.text);
+                    if (mutation.tags !== undefined)
+                        item.tags = cleanTags(mutation.tags);
+                    if (mutation.source !== undefined)
+                        item.source = mutation.source.trim() || 'manual';
+                    item.updated = Math.max(now, item.updated + 1);
+                    break;
+                case 'toggle':
+                    if (typeof mutation.enabled !== 'boolean')
+                        throw new TypeError('enabled 必须为布尔值');
+                    item.enabled = mutation.enabled;
+                    item.updated = Math.max(now, item.updated + 1);
+                    break;
+                case 'delete':
+                    list.splice(index, 1);
+                    break;
+                default: throw new TypeError('未知偏好操作');
+            }
+        }
+        const revision = await writeJsonAtomic(file, { ...doc.data, preferences: list });
+        return { scope, revision, preferences: list };
+    });
 }
-/**
- * 追加一条项目背景（按文本去重）。
- * @param text 项目背景原文。
- * @param workspaceRoot 工作区根目录。
- */
+/** 旧 API：全局偏好按规范化文本去重；不重新启用用户主动停用的偏好。 */
+export async function savePreference(text, tags, workspaceRoot) {
+    if (!text.trim())
+        return;
+    const trimmed = validateText(text);
+    const file = globalMemoryPath();
+    await locked(file, async () => {
+        const doc = await readDocument(file);
+        const list = preferences(doc.data, 'global');
+        const existing = list.find(item => normalizeKey(item.text) === normalizeKey(trimmed));
+        if (existing) {
+            existing.text = trimmed;
+            existing.tags = [...new Set([...existing.tags, ...cleanTags(tags)])];
+            existing.updated = Math.max(Date.now(), existing.updated + 1);
+        }
+        else
+            list.push({ id: randomUUID(), text: trimmed, tags: cleanTags(tags), source: 'learned', enabled: true, updated: Date.now() });
+        await writeJsonAtomic(file, { ...doc.data, preferences: list });
+    });
+    void workspaceRoot;
+}
 export async function saveProjectContext(text, workspaceRoot, scope = 'project') {
     const trimmed = text.trim();
-    if (trimmed === '')
+    if (!trimmed)
         return;
     const file = projectMemoryPath(workspaceRoot, scope);
-    const memory = coerceProject(await readJson(file, emptyProject()));
-    const key = normalizeKey(trimmed);
-    if (!memory.project_context.some((t) => normalizeKey(t) === key)) {
-        memory.project_context.push(trimmed);
-    }
-    await writeJsonAtomic(file, memory);
+    await locked(file, async () => {
+        const doc = await readDocument(file);
+        const context = project(doc.data).project_context;
+        if (!context.some(value => normalizeKey(value) === normalizeKey(trimmed)))
+            context.push(trimmed);
+        await writeJsonAtomic(file, { ...doc.data, project_context: context });
+    });
 }
-/**
- * 追加一条历史需求记录（R3：需求清单只进这里，绝不落盘成需求文件）。
- * @param task 任务原文或摘要。
- * @param requirements 用户确认过的四段式需求清单。
- * @param workspaceRoot 工作区根目录。
- */
 export async function saveHistory(task, requirements, workspaceRoot, scope = 'project') {
     const file = projectMemoryPath(workspaceRoot, scope);
-    const memory = coerceProject(await readJson(file, emptyProject()));
-    memory.history.push({
-        task: task.trim().slice(0, 200),
-        requirements: requirements.trim().slice(0, 2000),
-        date: new Date().toISOString().slice(0, 10),
+    await locked(file, async () => {
+        const doc = await readDocument(file);
+        const history = project(doc.data).history;
+        history.push({ task: task.trim().slice(0, 200), requirements: requirements.trim().slice(0, 2000), date: new Date().toISOString().slice(0, 10) });
+        await writeJsonAtomic(file, { ...doc.data, history: history.slice(-MAX_HISTORY) });
     });
-    // 只保留最近 MAX_HISTORY 条：摘要只用最后 3 条，其余留着也读不到。
-    if (memory.history.length > MAX_HISTORY)
-        memory.history = memory.history.slice(-MAX_HISTORY);
-    await writeJsonAtomic(file, memory);
 }
-/**
- * 清除记忆。
- * @param scope `global` 只清全局层、`project` 只清项目层、`all` 两层都清。
- * @param workspaceRoot 工作区根目录。
- */
-export async function forget(scope, workspaceRoot) {
-    if (scope === 'global' || scope === 'all') {
-        await writeJsonAtomic(globalMemoryPath(), emptyGlobal());
-    }
-    if (scope === 'project' || scope === 'all') {
-        await writeJsonAtomic(projectMemoryPath(workspaceRoot), emptyProject());
-    }
+/** 新增可选 projectScope 参数，旧调用保持原有默认行为。坏文件需要人工恢复，清除也不覆盖。 */
+export async function forget(scope, workspaceRoot, projectScope = 'project') {
+    if (!['global', 'project', 'all'].includes(scope))
+        throw new TypeError('未知记忆范围');
+    const clear = (file, empty) => locked(file, async () => {
+        await readDocument(file);
+        await writeJsonAtomic(file, empty);
+    });
+    if (scope === 'global' || scope === 'all')
+        await clear(globalMemoryPath(), emptyGlobal());
+    if (scope === 'project' || scope === 'all')
+        await clear(projectMemoryPath(workspaceRoot, projectScope), emptyProject());
 }
-/** 截断长文本并补省略号。 */
 function clip(text, limit) {
     const flat = text.replace(/\s+/g, ' ').trim();
     return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`;
 }
-/**
- * 生成注入提示用的紧凑中文摘要（上限 {@link SUMMARY_LIMIT} 字符）。
- * @param memory 两层记忆快照。
- */
 export function summarize(memory) {
     const sections = [];
-    const preferences = memory.global.preferences.slice(-SUMMARY_MAX_PREFERENCES);
-    if (preferences.length > 0) {
-        sections.push(`【全局偏好】\n${preferences.map((p) => `- ${clip(p.text, 40)}`).join('\n')}`);
+    for (const [title, items] of [['全局偏好', memory.global.preferences], ['项目偏好', memory.project.preferences ?? []]]) {
+        const enabled = items.filter(item => item.enabled !== false).slice(-5);
+        if (enabled.length)
+            sections.push(`【${title}】\n${enabled.map(item => `- ${clip(item.text, 40)}`).join('\n')}`);
     }
-    const context = memory.project.project_context.slice(-SUMMARY_MAX_CONTEXT);
-    if (context.length > 0) {
-        sections.push(`【项目背景】\n${context.map((t) => `- ${clip(t, 60)}`).join('\n')}`);
-    }
-    const history = memory.project.history.slice(-SUMMARY_MAX_HISTORY);
-    if (history.length > 0) {
-        sections.push(`【历史需求】\n${history.map((h) => `- ${clip(h.task, 30)} → ${clip(h.requirements, 60)}`).join('\n')}`);
-    }
+    const context = memory.project.project_context.slice(-5);
+    if (context.length)
+        sections.push(`【项目背景】\n${context.map(text => `- ${clip(text, 60)}`).join('\n')}`);
+    const history = memory.project.history.slice(-3);
+    if (history.length)
+        sections.push(`【历史需求】\n${history.map(item => `- ${clip(item.task, 30)} → ${clip(item.requirements, 60)}`).join('\n')}`);
     const joined = sections.join('\n');
-    if (joined.length <= SUMMARY_LIMIT)
-        return joined;
-    return `${joined.slice(0, SUMMARY_LIMIT - 1)}…`;
+    return joined.length <= SUMMARY_LIMIT ? joined : `${joined.slice(0, SUMMARY_LIMIT - 1)}…`;
 }

@@ -44,6 +44,11 @@ export const READ_ONLY_TOOLS: readonly string[] = [
   'ops_grep',
   'ops_glob',
   'ops_inspect_local_file',
+  'ops_read_files',
+  'ops_read_pdf',
+  'ops_result',
+  'ops_discover_tools',
+  'grill_research',
   'search_context',
   'decompress',
   'acp_status',
@@ -144,6 +149,8 @@ function extractMessageText(payload: unknown): string {
 /** 每个 agent 的门禁状态表（agent 级隔离）。 */
 export class GateRegistry {
   private readonly states = new Map<string, GateState>()
+  private readonly revisions = new Map<string, number>()
+  revisionOf(agentId: string): number { return this.revisions.get(agentId) ?? 0 }
 
   /** 读取状态；未登记的 agent 默认 closed（新会话即"未确认"）。 */
   stateOf(agentId: string): GateState {
@@ -157,7 +164,10 @@ export class GateRegistry {
 
   /** 拦截该 agent（新用户消息到达时重置）。 */
   close(agentId: string): void {
-    if (agentId) this.states.set(agentId, 'closed')
+    if (agentId) {
+      this.states.set(agentId, 'closed')
+      this.revisions.set(agentId, this.revisionOf(agentId) + 1)
+    }
   }
 
   /** 清空（插件卸载时调用）。 */
@@ -213,10 +223,9 @@ export function registerGate(ctx: GrillContext, gates: GateRegistry, options: Ga
         return { kind: 'deny', reason: decision.reason ?? GATE_DENY_REASON } satisfies PreToolDecision
       }
       if (decision.action === 'ask') {
-        // 只问一次：卡片弹过之后无论用户点头还是否决，都由用户决定，插件不再逐次弹
-        // （否则一次任务里写 20 个文件就会弹 20 张卡片）。
+        // ask 仅请求当前工具的审批；任务放行仍由 grill_confirm 或显式跳过完成。
         ctx.logger?.info?.(`[grill-first] 询问 ${exec.name}（需求未确认，agent=${agentId}）`)
-        gates.open(agentId)
+        // 单次工具审批结果不能代替整个任务的需求确认，拒绝或取消后仍保持关闭。
         return {
           kind: 'ask',
           reason: decision.reason ?? GATE_DENY_REASON,

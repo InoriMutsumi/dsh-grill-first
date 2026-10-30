@@ -22,6 +22,8 @@ export interface GrillConfig {
     memoryEnabled: boolean;
     /** 项目层记忆落在哪里（0.1.4 新增：有些项目不想被写进 .dsh/）。 */
     memoryScope: MemoryScope;
+    researchMode: 'off' | 'auto' | 'always';
+    researchDepth: 'quick' | 'deep';
 }
 /** 默认配置（与工作表 3.7 的默认值一致）。 */
 export declare const DEFAULT_CONFIG: GrillConfig;

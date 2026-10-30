@@ -1,8 +1,8 @@
 name: Release
 
-# 打 tag（v0.1.4 之类）自动发布到 npm。
+# 打 tag（v1.0.1 之类）自动发布到 npm。
 # 需要仓库 Secrets 里配 NPM_TOKEN（npm 的 Granular Access Token，勾选 Bypass 2FA、读写 All packages）；
-# 没配的话这一步会被跳过，改用本地 `npm publish`。
+# 没配、或该版本已发布过时，这一步会跳过，改用本地 `npm publish`。
 on:
   push:
     tags:
@@ -23,7 +23,17 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Publish to npm
-        if: ${{ env.NODE_AUTH_TOKEN != '' }}
-        run: npm publish --access public
+        # secrets 不能在 step 的 if 里直接引用，所以在脚本里判断是否为空。
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "未配置 NPM_TOKEN，跳过发布"
+            exit 0
+          fi
+          version="$(node -p "require('./package.json').version")"
+          if npm view "dsh-grill-first@$version" version >/dev/null 2>&1; then
+            echo "dsh-grill-first@$version 已存在于 npm，跳过发布"
+            exit 0
+          fi
+          npm publish --access public
